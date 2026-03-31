@@ -2,7 +2,7 @@ import os
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-from backend.llm.base import LLMProvider
+from .base import LLMProvider
 
 
 class OpenAIProvider(LLMProvider):

@@ -1,6 +1,6 @@
 import os
 
-from backend.llm.base import LLMProvider
+from .base import LLMProvider
 
 
 def get_llm_provider() -> LLMProvider:
@@ -8,13 +8,13 @@ def get_llm_provider() -> LLMProvider:
     provider = os.environ.get("LLM_PROVIDER", "openai").lower()
 
     if provider == "openai":
-        from backend.llm.openai_provider import OpenAIProvider
+        from .openai_provider import OpenAIProvider
         return OpenAIProvider()
     elif provider == "anthropic":
-        from backend.llm.anthropic_provider import AnthropicProvider
+        from .anthropic_provider import AnthropicProvider
         return AnthropicProvider()
     elif provider == "ollama":
-        from backend.llm.ollama_provider import OllamaProvider
+        from .ollama_provider import OllamaProvider
         return OllamaProvider()
     else:
         raise ValueError(
@@ -31,10 +31,10 @@ def get_embedding_provider() -> LLMProvider:
     provider = os.environ.get("EMBEDDING_PROVIDER", "openai").lower()
 
     if provider == "openai":
-        from backend.llm.openai_provider import OpenAIProvider
+        from .openai_provider import OpenAIProvider
         return OpenAIProvider()
     elif provider == "ollama":
-        from backend.llm.ollama_provider import OllamaProvider
+        from .ollama_provider import OllamaProvider
         return OllamaProvider()
     elif provider == "anthropic":
         raise ValueError(
