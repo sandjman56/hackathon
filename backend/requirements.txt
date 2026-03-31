@@ -10,4 +10,5 @@ psycopg2-binary
 httpx
 pydantic
 anthropic
+langchain-google-genai
 ollama
