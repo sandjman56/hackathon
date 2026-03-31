@@ -2,7 +2,7 @@ import os
 
 import ollama
 
-from backend.llm.base import LLMProvider
+from .base import LLMProvider
 
 
 class OllamaProvider(LLMProvider):

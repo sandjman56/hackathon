@@ -1,6 +1,6 @@
 import logging
 
-from backend.llm.base import LLMProvider
+from ..llm.base import LLMProvider
 
 logger = logging.getLogger("eia.agents.environmental_data")
 
