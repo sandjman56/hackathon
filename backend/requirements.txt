@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-dotenv
+langgraph
+langchain
+langchain-openai
+langchain-anthropic
+llama-index
+llama-index-vector-stores-postgres
+psycopg2-binary
+pgvector
+httpx
+pydantic
+anthropic
+ollama
