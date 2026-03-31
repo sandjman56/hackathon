@@ -1,7 +1,7 @@
 import logging
 
-from ..llm.provider_factory import get_embedding_provider
-from ..db.vector_store import get_vector_store
+from llm.provider_factory import get_embedding_provider
+from db.vector_store import get_vector_store
 
 logger = logging.getLogger("eia.rag.retriever")
 

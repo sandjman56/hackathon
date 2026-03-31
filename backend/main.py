@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from backend.llm.provider_factory import get_llm_provider, get_embedding_provider
+from llm.provider_factory import get_llm_provider, get_embedding_provider
 
 load_dotenv()
 
