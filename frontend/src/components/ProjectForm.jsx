@@ -1,5 +1,11 @@
 import { useState } from 'react'
 
+const PRESET_LOCATIONS = [
+  { label: 'New York City', coordinates: '40.7128, -74.0060' },
+  { label: 'Pittsburgh', coordinates: '40.4406, -79.9959' },
+  { label: 'Washington DC', coordinates: '38.8950, -77.0364' },
+]
+
 const AGENTS = [
   'project_parser',
   'environmental_data',
@@ -8,7 +14,7 @@ const AGENTS = [
   'report_synthesis',
 ]
 
-export default function ProjectForm({ onResult, onPipelineUpdate }) {
+export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange }) {
   const [projectName, setProjectName] = useState('')
   const [coordinates, setCoordinates] = useState('')
   const [description, setDescription] = useState('')
@@ -17,9 +23,12 @@ export default function ProjectForm({ onResult, onPipelineUpdate }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
+    onLog?.(null)  // clear Brain Scanner for new run
+    onRunningChange?.(true)
     onPipelineUpdate(
       Object.fromEntries(AGENTS.map((a) => [a, 'pending']))
     )
+    onStepsUpdate?.({})
 
     try {
       const res = await fetch('/api/run', {
@@ -31,8 +40,46 @@ export default function ProjectForm({ onResult, onPipelineUpdate }) {
           description,
         }),
       })
-      const data = await res.json()
-      onResult(data)
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        // Parse SSE events from buffer
+        const events = buffer.split('\n\n')
+        // Keep the last chunk (may be incomplete)
+        buffer = events.pop() || ''
+
+        for (const eventBlock of events) {
+          if (!eventBlock.trim()) continue
+
+          let eventType = ''
+          let eventData = ''
+
+          for (const line of eventBlock.split('\n')) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7)
+            } else if (line.startsWith('data: ')) {
+              eventData = line.slice(6)
+            }
+          }
+
+          if (!eventData) continue
+
+          try {
+            const data = JSON.parse(eventData)
+            handleSSEEvent(eventType, data)
+          } catch {
+            // skip malformed events
+          }
+        }
+      }
     } catch (err) {
       console.error('Pipeline error:', err)
       onPipelineUpdate(
@@ -40,6 +87,55 @@ export default function ProjectForm({ onResult, onPipelineUpdate }) {
       )
     } finally {
       setLoading(false)
+      onRunningChange?.(false)
+    }
+  }
+
+  const handleSSEEvent = (eventType, data) => {
+    switch (eventType) {
+      case 'pipeline_start':
+        if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
+        if (data.agent_steps) onStepsUpdate?.(data.agent_steps)
+        break
+
+      case 'agent_start':
+        if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
+        if (data.steps) {
+          onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.steps }))
+        }
+        break
+
+      case 'agent_step':
+        if (data.steps) {
+          onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.steps }))
+        }
+        break
+
+      case 'agent_complete':
+      case 'agent_error':
+        if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
+        if (data.steps) {
+          onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.steps }))
+        }
+        break
+
+      case 'result':
+        onResult(data)
+        break
+
+      case 'log':
+        onLog?.(data)
+        break
+
+      case 'cancelled':
+        onLog?.({
+          ts: Date.now() / 1000,
+          level: 'WARNING',
+          logger: 'eia.pipeline',
+          msg: data.msg || 'Pipeline cancelled',
+        })
+        onRunningChange?.(false)
+        break
     }
   }
 
@@ -60,16 +156,31 @@ export default function ProjectForm({ onResult, onPipelineUpdate }) {
 
         <div style={styles.fieldGroup}>
           <label style={styles.fieldLabel}>Coordinates</label>
+          <div style={styles.presets}>
+            {PRESET_LOCATIONS.map((loc) => (
+              <button
+                key={loc.label}
+                type="button"
+                style={{
+                  ...styles.presetBtn,
+                  ...(coordinates === loc.coordinates ? styles.presetBtnActive : {}),
+                }}
+                onClick={() => setCoordinates(loc.coordinates)}
+              >
+                {loc.label}
+              </button>
+            ))}
+          </div>
           <input
             style={styles.input}
             type="text"
             value={coordinates}
             onChange={(e) => setCoordinates(e.target.value)}
-            placeholder="40.4406\u00b0 N, 79.9959\u00b0 W"
+            placeholder="40.4406, -79.9959"
             required
           />
           <span style={styles.helper}>
-            Enter decimal degrees or DMS format
+            Decimal degrees — or click a preset above
           </span>
         </div>
 
@@ -157,6 +268,27 @@ const styles = {
   },
   textarea: {
     resize: 'vertical',
+  },
+  presets: {
+    display: 'flex',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  presetBtn: {
+    padding: '4px 10px',
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    borderRadius: '3px',
+    color: 'var(--text-secondary)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '11px',
+    cursor: 'pointer',
+    letterSpacing: '0.5px',
+    transition: 'border-color 0.15s, color 0.15s',
+  },
+  presetBtnActive: {
+    borderColor: 'var(--green-primary)',
+    color: 'var(--green-primary)',
   },
   helper: {
     display: 'block',

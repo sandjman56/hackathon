@@ -13,6 +13,18 @@ class ProjectParserAgent:
         self.llm = llm
 
     def run(self, state: dict) -> dict:
-        logger.info(f"[ProjectParser] Running with provider: {self.llm.provider_name}")
-        state["project_parser"] = "complete"
+        desc = state.get("description", "")
+        logger.info("[ProjectParser] Starting — LLM provider: %s", self.llm.provider_name)
+        logger.info("[ProjectParser] Inputs: project_name=%r  coordinates=%r",
+                    state.get("project_name"), state.get("coordinates"))
+        logger.info("[ProjectParser] Description: %d chars received", len(desc))
+        logger.info("[ProjectParser] Task: extract project_type, scale, location, "
+                    "permits_required via structured LLM call")
+        logger.info("[ProjectParser] Invoking %s for structured extraction...",
+                    self.llm.provider_name)
+        logger.warning("[ProjectParser] STUB — LLM structured extraction not yet "
+                       "implemented; returning empty parsed_project")
+        logger.info("[ProjectParser] parsed_project set to {} (placeholder)")
+        state["parsed_project"] = {}
+        logger.info("[ProjectParser] Node complete")
         return state

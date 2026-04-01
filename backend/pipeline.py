@@ -1,0 +1,378 @@
+import json
+import logging
+import threading
+from typing import TypedDict
+
+from langgraph.graph import StateGraph, START, END
+
+from llm.base import LLMProvider
+from agents.project_parser import ProjectParserAgent
+from agents.environmental_data import EnvironmentalDataAgent
+from agents.regulatory_screening import RegulatoryScreeningAgent
+from agents.impact_analysis import ImpactAnalysisAgent
+from agents.report_synthesis import ReportSynthesisAgent
+
+logger = logging.getLogger("eia.pipeline")
+
+# ── Cancellation ──────────────────────────────────────────────────────────────
+
+_cancel_flag = threading.Event()
+
+
+def cancel_pipeline():
+    """Signal the currently-running pipeline to stop after the current agent."""
+    _cancel_flag.set()
+
+
+# ── SSE log buffer ────────────────────────────────────────────────────────────
+
+class _SSELogBuffer(logging.Handler):
+    """Captures eia.* log records into a thread-safe list for SSE emission."""
+
+    def __init__(self):
+        super().__init__()
+        self._lock = threading.Lock()
+        self._records: list[dict] = []
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record: logging.LogRecord):
+        with self._lock:
+            self._records.append({
+                "ts": record.created,
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": self.format(record),
+            })
+
+    def flush_events(self) -> list[dict]:
+        with self._lock:
+            events = list(self._records)
+            self._records.clear()
+        return events
+
+
+# ── State schema ──────────────────────────────────────────────────────────────
+
+class ImpactRow(TypedDict):
+    category: str
+    significance: str  # "significant" | "moderate" | "minimal" | "none"
+    notes: str
+
+
+class Regulation(TypedDict):
+    name: str
+    description: str
+    jurisdiction: str
+
+
+class EIAPipelineState(TypedDict):
+    # Input fields
+    project_name: str
+    coordinates: str
+    description: str
+
+    # Pipeline tracking
+    pipeline_status: dict  # agent_key -> "pending"|"running"|"complete"|"error"
+    errors: dict
+
+    # Agent outputs
+    parsed_project: dict
+    environmental_data: dict
+    regulations: list[Regulation]
+    impact_matrix: list[ImpactRow]
+    report: str
+
+
+# ── Agent registry ────────────────────────────────────────────────────────────
+
+AGENT_REGISTRY = [
+    ("project_parser", ProjectParserAgent),
+    ("environmental_data", EnvironmentalDataAgent),
+    ("regulatory_screening", RegulatoryScreeningAgent),
+    ("impact_analysis", ImpactAnalysisAgent),
+    ("report_synthesis", ReportSynthesisAgent),
+]
+
+AGENT_STEPS = {
+    "project_parser": [
+        {"name": "parse_description", "label": "Parsing project description"},
+        {"name": "extract_metadata", "label": "Extracting project metadata"},
+        {"name": "geocode_coordinates", "label": "Validating coordinates"},
+    ],
+    "environmental_data": [
+        {"name": "query_usfws", "label": "Querying USFWS IPaC (endangered species)"},
+        {"name": "query_nwi", "label": "Querying National Wetlands Inventory"},
+        {"name": "query_fema", "label": "Querying FEMA flood hazards"},
+        {"name": "query_farmland", "label": "Querying USDA farmland data"},
+        {"name": "query_ejscreen", "label": "Querying EPA EJScreen"},
+    ],
+    "regulatory_screening": [
+        {"name": "embed_query", "label": "Embedding project context"},
+        {"name": "retrieve_regulations", "label": "Retrieving NEPA regulations (RAG)"},
+        {"name": "screen_applicability", "label": "Screening regulatory applicability"},
+    ],
+    "impact_analysis": [
+        {"name": "analyze_categories", "label": "Analyzing impact categories"},
+        {"name": "score_significance", "label": "Scoring significance levels"},
+        {"name": "generate_matrix", "label": "Generating impact matrix"},
+    ],
+    "report_synthesis": [
+        {"name": "compile_findings", "label": "Compiling findings"},
+        {"name": "generate_report", "label": "Generating EIA report"},
+        {"name": "format_output", "label": "Formatting final output"},
+    ],
+}
+
+AGENT_LABELS = {
+    "project_parser": "Project Parser",
+    "environmental_data": "Environmental Data",
+    "regulatory_screening": "Regulatory Screening",
+    "impact_analysis": "Impact Analysis",
+    "report_synthesis": "Report Synthesis",
+}
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider):
+    """Create a LangGraph node function wrapping an agent's .run() call."""
+    agent = agent_class(llm)
+
+    def node_fn(state: EIAPipelineState) -> dict:
+        logger.info("[GRAPH] Entering node: %s", agent_key)
+        status = dict(state.get("pipeline_status", {}))
+        status[agent_key] = "running"
+
+        try:
+            updated_state = agent.run(dict(state))
+            status[agent_key] = "complete"
+            logger.info("[GRAPH] Node %s → complete", agent_key)
+
+            result = {"pipeline_status": status}
+            for k, v in updated_state.items():
+                if k != "pipeline_status" and (k not in state or state[k] != v):
+                    result[k] = v
+            return result
+
+        except Exception as exc:
+            logger.error("[GRAPH] Node %s → ERROR: %s", agent_key, exc, exc_info=True)
+            status[agent_key] = "error"
+            errors = dict(state.get("errors", {}))
+            errors[agent_key] = str(exc)
+            return {"pipeline_status": status, "errors": errors}
+
+    return node_fn
+
+
+def build_pipeline(llm: LLMProvider):
+    """Construct and compile the EIA LangGraph pipeline."""
+    graph = StateGraph(EIAPipelineState)
+    for agent_key, agent_class in AGENT_REGISTRY:
+        graph.add_node(agent_key, _make_agent_node(agent_key, agent_class, llm))
+    prev = START
+    for agent_key, _ in AGENT_REGISTRY:
+        graph.add_edge(prev, agent_key)
+        prev = agent_key
+    graph.add_edge(prev, END)
+    return graph.compile()
+
+
+def run_eia_pipeline(
+    project_name: str,
+    coordinates: str,
+    description: str,
+    llm: LLMProvider,
+) -> dict:
+    compiled = build_pipeline(llm)
+    initial_state: EIAPipelineState = {
+        "project_name": project_name,
+        "coordinates": coordinates,
+        "description": description,
+        "pipeline_status": {key: "pending" for key, _ in AGENT_REGISTRY},
+        "parsed_project": {},
+        "environmental_data": {},
+        "regulations": [],
+        "impact_matrix": [],
+        "report": "",
+        "errors": {},
+    }
+    final_state = compiled.invoke(initial_state)
+    return {
+        "project_name": final_state["project_name"],
+        "coordinates": final_state["coordinates"],
+        "description": final_state["description"],
+        "pipeline_status": final_state["pipeline_status"],
+        "impact_matrix": final_state.get("impact_matrix", []),
+        "regulations": final_state.get("regulations", []),
+    }
+
+
+# ── Streaming pipeline ────────────────────────────────────────────────────────
+
+def stream_eia_pipeline(
+    project_name: str,
+    coordinates: str,
+    description: str,
+    llm: LLMProvider,
+):
+    """Execute the EIA pipeline as a generator yielding SSE events.
+
+    Emits agent/step progress events interleaved with buffered log events so
+    the frontend Brain Scanner can display real-time observability data.
+    """
+    _cancel_flag.clear()
+
+    # Attach SSE log buffer to the eia logger hierarchy for this run
+    log_buffer = _SSELogBuffer()
+    eia_root = logging.getLogger("eia")
+    eia_root.addHandler(log_buffer)
+
+    pipeline_status = {key: "pending" for key, _ in AGENT_REGISTRY}
+    agent_steps = {key: [] for key, _ in AGENT_REGISTRY}
+    errors = {}
+
+    state = {
+        "project_name": project_name,
+        "coordinates": coordinates,
+        "description": description,
+        "pipeline_status": pipeline_status,
+        "parsed_project": {},
+        "environmental_data": {},
+        "regulations": [],
+        "impact_matrix": [],
+        "report": "",
+        "errors": errors,
+    }
+
+    def _flush_logs():
+        """Yield all buffered log records as SSE log events."""
+        for record in log_buffer.flush_events():
+            yield _sse_event("log", record)
+
+    try:
+        logger.info("[PIPELINE] Starting EIA pipeline — project: %r", project_name)
+        logger.info("[PIPELINE] Coordinates: %s", coordinates)
+        logger.info("[PIPELINE] LLM provider: %s", llm.provider_name)
+        logger.info("[GRAPH] Compiled graph: %d nodes → %s",
+                    len(AGENT_REGISTRY),
+                    " → ".join(k for k, _ in AGENT_REGISTRY))
+
+        yield _sse_event("pipeline_start", {
+            "pipeline_status": dict(pipeline_status),
+            "agent_steps": {k: list(v) for k, v in agent_steps.items()},
+        })
+        yield from _flush_logs()
+
+        for agent_key, agent_class in AGENT_REGISTRY:
+
+            # ── Cancellation check ────────────────────────────────────────────
+            if _cancel_flag.is_set():
+                logger.warning("[PIPELINE] Cancelled by user before node: %s", agent_key)
+                yield from _flush_logs()
+                yield _sse_event("cancelled", {
+                    "msg": "Pipeline interrupted by user (/q)",
+                    "stopped_before": agent_key,
+                    "pipeline_status": dict(pipeline_status),
+                })
+                return
+
+            agent = agent_class(llm)
+            steps = AGENT_STEPS.get(agent_key, [])
+
+            # ── Agent start ───────────────────────────────────────────────────
+            pipeline_status[agent_key] = "running"
+            agent_steps[agent_key] = [
+                {"name": s["name"], "label": s["label"], "status": "pending"}
+                for s in steps
+            ]
+
+            logger.info("[GRAPH] → Activating node: %s (%s)",
+                        agent_key, AGENT_LABELS[agent_key])
+            logger.info("[GRAPH] State keys entering node: %s", list(state.keys()))
+
+            yield _sse_event("agent_start", {
+                "agent": agent_key,
+                "pipeline_status": dict(pipeline_status),
+                "steps": agent_steps[agent_key],
+            })
+            yield from _flush_logs()
+
+            try:
+                for i, step in enumerate(steps):
+                    agent_steps[agent_key][i]["status"] = "running"
+                    yield _sse_event("agent_step", {
+                        "agent": agent_key,
+                        "step": step["name"],
+                        "label": step["label"],
+                        "status": "running",
+                        "steps": agent_steps[agent_key],
+                    })
+                    yield from _flush_logs()
+
+                    # All real work happens on the last step
+                    if i == len(steps) - 1:
+                        logger.info("[GRAPH] Invoking %s.run()", agent_class.__name__)
+                        state = agent.run(dict(state))
+                        logger.info("[GRAPH] %s.run() returned — flushing logs",
+                                    agent_class.__name__)
+                        yield from _flush_logs()
+
+                    agent_steps[agent_key][i]["status"] = "complete"
+                    yield _sse_event("agent_step", {
+                        "agent": agent_key,
+                        "step": step["name"],
+                        "label": step["label"],
+                        "status": "complete",
+                        "steps": agent_steps[agent_key],
+                    })
+
+                pipeline_status[agent_key] = "complete"
+                state["pipeline_status"] = dict(pipeline_status)
+
+                logger.info("[GRAPH] ← Node %s complete", agent_key)
+                yield from _flush_logs()
+
+                yield _sse_event("agent_complete", {
+                    "agent": agent_key,
+                    "pipeline_status": dict(pipeline_status),
+                    "steps": agent_steps[agent_key],
+                })
+
+            except Exception as exc:
+                logger.error("[GRAPH] Node %s raised: %s", agent_key, exc, exc_info=True)
+                for step_state in agent_steps[agent_key]:
+                    if step_state["status"] != "complete":
+                        step_state["status"] = "error"
+
+                pipeline_status[agent_key] = "error"
+                errors[agent_key] = str(exc)
+                state["pipeline_status"] = dict(pipeline_status)
+                state["errors"] = dict(errors)
+
+                yield from _flush_logs()
+                yield _sse_event("agent_error", {
+                    "agent": agent_key,
+                    "error": str(exc),
+                    "pipeline_status": dict(pipeline_status),
+                    "steps": agent_steps[agent_key],
+                })
+
+        logger.info("[PIPELINE] All nodes complete — emitting result")
+        yield from _flush_logs()
+
+        yield _sse_event("result", {
+            "project_name": state["project_name"],
+            "coordinates": state["coordinates"],
+            "description": state["description"],
+            "pipeline_status": dict(pipeline_status),
+            "impact_matrix": state.get("impact_matrix", []),
+            "regulations": state.get("regulations", []),
+            "errors": errors if errors else None,
+        })
+
+    finally:
+        eia_root.removeHandler(log_buffer)
