@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from llm.provider_factory import get_llm_provider, get_embedding_provider
+from pipeline import stream_eia_pipeline, cancel_pipeline
 
 load_dotenv()
 
@@ -42,6 +44,12 @@ class RunRequest(BaseModel):
     description: str
 
 
+@app.post("/api/cancel")
+def cancel_run():
+    cancel_pipeline()
+    return {"status": "cancelled"}
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -53,18 +61,16 @@ def health():
 
 @app.post("/api/run")
 def run_pipeline(req: RunRequest):
-    # TODO: Wire up the real LangGraph pipeline here
-    return {
-        "project_name": req.project_name,
-        "coordinates": req.coordinates,
-        "description": req.description,
-        "pipeline_status": {
-            "project_parser": "pending",
-            "environmental_data": "pending",
-            "regulatory_screening": "pending",
-            "impact_analysis": "pending",
-            "report_synthesis": "pending",
+    return StreamingResponse(
+        stream_eia_pipeline(
+            project_name=req.project_name,
+            coordinates=req.coordinates,
+            description=req.description,
+            llm=app.state.llm_provider,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
         },
-        "impact_matrix": [],
-        "regulations": [],
-    }
+    )

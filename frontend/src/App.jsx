@@ -2,6 +2,7 @@ import { useState } from 'react'
 import ProjectForm from './components/ProjectForm.jsx'
 import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
+import BrainScanner from './components/BrainScanner.jsx'
 
 const AGENTS = [
   'project_parser',
@@ -15,17 +16,41 @@ function App() {
   const [pipelineState, setPipelineState] = useState(
     Object.fromEntries(AGENTS.map((a) => [a, 'idle']))
   )
-  const [results, setResults] = useState(null)
+  const [results, setResults]   = useState(null)
+  const [logs, setLogs]         = useState([])
+  const [running, setRunning]   = useState(false)
 
   const handleResult = (data) => {
     setResults(data)
-    if (data?.pipeline_status) {
-      setPipelineState(data.pipeline_status)
-    }
+    if (data?.pipeline_status) setPipelineState(data.pipeline_status)
+    setRunning(false)
   }
 
   const handlePipelineUpdate = (state) => {
     setPipelineState(state)
+  }
+
+  const handleLog = (entry) => {
+    if (entry === null) {
+      setLogs([])
+    } else {
+      setLogs((prev) => [...prev, entry])
+    }
+  }
+
+  const handleRunningChange = (isRunning) => {
+    setRunning(isRunning)
+  }
+
+  const handleCommand = async (cmd) => {
+    if (cmd === '/q') {
+      try {
+        await fetch('/api/cancel', { method: 'POST' })
+      } catch {
+        // best-effort
+      }
+      setRunning(false)
+    }
   }
 
   return (
@@ -38,27 +63,44 @@ function App() {
           <span style={styles.version}>v0.1.0</span>
         </div>
         <div style={styles.headerRight}>
-          <span style={styles.providerBadge}>GPT-4o</span>
+          <span style={styles.providerBadge}>Gemini</span>
           <span style={styles.statusChip}>SYSTEM ONLINE</span>
         </div>
       </header>
 
-      {/* Main content */}
+      {/* Main — 3 columns */}
       <div style={styles.main}>
-        <div style={styles.leftColumn}>
+        {/* Left: project form */}
+        <div style={styles.colLeft}>
           <ProjectForm
             onResult={handleResult}
             onPipelineUpdate={handlePipelineUpdate}
+            onLog={handleLog}
+            onRunningChange={handleRunningChange}
           />
         </div>
+
         <div style={styles.separator} />
-        <div style={styles.rightColumn}>
-          <div style={styles.rightTop}>
+
+        {/* Middle: pipeline status + results */}
+        <div style={styles.colMiddle}>
+          <div style={styles.colMiddleTop}>
             <AgentPipeline pipelineState={pipelineState} />
           </div>
-          <div style={styles.rightBottom}>
+          <div style={styles.colMiddleBottom}>
             <ResultsPanel results={results} />
           </div>
+        </div>
+
+        <div style={styles.separator} />
+
+        {/* Right: brain scanner */}
+        <div style={styles.colRight}>
+          <BrainScanner
+            logs={logs}
+            running={running}
+            onCommand={handleCommand}
+          />
         </div>
       </div>
     </div>
@@ -71,7 +113,6 @@ const pulseKeyframes = `
   50% { opacity: 0.3; }
 }
 `
-
 if (typeof document !== 'undefined') {
   const style = document.createElement('style')
   style.textContent = pulseKeyframes
@@ -145,32 +186,41 @@ const styles = {
     flex: 1,
     overflow: 'hidden',
   },
-  leftColumn: {
-    width: '40%',
-    padding: '20px',
-    overflowY: 'auto',
-  },
   separator: {
     width: '1px',
-    background: 'var(--green-dim)',
+    background: 'var(--border)',
     flexShrink: 0,
   },
-  rightColumn: {
-    width: '60%',
+  colLeft: {
+    width: '30%',
+    padding: '20px',
+    overflowY: 'auto',
+    flexShrink: 0,
+  },
+  colMiddle: {
+    width: '28%',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
+    flexShrink: 0,
   },
-  rightTop: {
+  colMiddleTop: {
     flex: 1,
     padding: '20px',
     overflowY: 'auto',
     borderBottom: '1px solid var(--border)',
   },
-  rightBottom: {
+  colMiddleBottom: {
     flex: 1,
     padding: '20px',
     overflowY: 'auto',
+  },
+  colRight: {
+    flex: 1,
+    padding: '20px',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
   },
 }
 
