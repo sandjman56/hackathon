@@ -5,7 +5,7 @@ from .base import LLMProvider
 
 def get_llm_provider() -> LLMProvider:
     """Resolve the LLM_PROVIDER env var to a concrete LLMProvider instance."""
-    provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
 
     if provider == "openai":
         from .openai_provider import OpenAIProvider
@@ -31,7 +31,7 @@ def get_embedding_provider() -> LLMProvider:
 
     Note: Anthropic does not support embeddings. Use 'openai', 'gemini', or 'ollama'.
     """
-    provider = os.environ.get("EMBEDDING_PROVIDER", "openai").lower()
+    provider = os.environ.get("EMBEDDING_PROVIDER", "gemini").lower()
 
     if provider == "openai":
         from .openai_provider import OpenAIProvider

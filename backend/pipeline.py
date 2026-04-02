@@ -1,6 +1,8 @@
 import json
 import logging
+import sys
 import threading
+import traceback
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
@@ -224,6 +226,14 @@ def stream_eia_pipeline(
     Emits agent/step progress events interleaved with buffered log events so
     the frontend Brain Scanner can display real-time observability data.
     """
+    # Print-based panic log: guaranteed stdout even if logging config is broken.
+    print(
+        f"[PIPELINE] stream_eia_pipeline entered — "
+        f"project={project_name!r} "
+        f"provider={getattr(llm, 'provider_name', '<unknown>')}",
+        flush=True, file=sys.stderr,
+    )
+
     _cancel_flag.clear()
 
     # Attach SSE log buffer to the eia logger hierarchy for this run
@@ -374,5 +384,21 @@ def stream_eia_pipeline(
             "errors": errors if errors else None,
         })
 
+    except Exception as exc:
+        # Catch anything the per-agent handlers missed (e.g. setup failures,
+        # import errors, unexpected exceptions in the orchestration layer).
+        print(
+            f"[PIPELINE] UNHANDLED EXCEPTION: {type(exc).__name__}: {exc}",
+            flush=True, file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        logger.error("[PIPELINE] Unhandled exception in generator: %s", exc, exc_info=True)
+        yield _sse_event("pipeline_error", {
+            "msg": str(exc),
+            "type": type(exc).__name__,
+            "pipeline_status": dict(pipeline_status),
+        })
+
     finally:
         eia_root.removeHandler(log_buffer)
+        print("[PIPELINE] stream_eia_pipeline exiting", flush=True, file=sys.stderr)

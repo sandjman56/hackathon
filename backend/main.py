@@ -1,4 +1,5 @@
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -12,16 +13,34 @@ from pipeline import stream_eia_pipeline, cancel_pipeline
 
 load_dotenv()
 
-logger = logging.getLogger("eia")
+# Explicit stdout handler on the eia logger so it survives Uvicorn's dictConfig
+# override and is always visible in Render/container logs.
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setLevel(logging.DEBUG)
+_stdout_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(name)s — %(message)s")
+)
+_eia_logger = logging.getLogger("eia")
+_eia_logger.setLevel(logging.DEBUG)
+_eia_logger.addHandler(_stdout_handler)
+_eia_logger.propagate = False  # prevent double-printing via root logger
+
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("eia")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    llm = get_llm_provider()
-    emb = get_embedding_provider()
-    logger.info(f"LLM provider: {llm.provider_name}")
-    logger.info(f"Embedding provider: {emb.provider_name}")
+    print("[LIFESPAN] Initialising LLM providers…", flush=True, file=sys.stdout)
+    try:
+        llm = get_llm_provider()
+        emb = get_embedding_provider()
+    except Exception as exc:
+        print(f"[LIFESPAN] PROVIDER INIT FAILED: {exc}", flush=True, file=sys.stdout)
+        raise
+    logger.info("LLM provider: %s", llm.provider_name)
+    logger.info("Embedding provider: %s", emb.provider_name)
+    print(f"[LIFESPAN] LLM={llm.provider_name}  Embedding={emb.provider_name}", flush=True, file=sys.stdout)
     app.state.llm_provider = llm
     app.state.embedding_provider = emb
     yield
