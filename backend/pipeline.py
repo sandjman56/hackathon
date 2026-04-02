@@ -133,6 +133,14 @@ AGENT_LABELS = {
     "report_synthesis": "Report Synthesis",
 }
 
+AGENT_OUTPUT_KEYS = {
+    "project_parser": "parsed_project",
+    "environmental_data": "environmental_data",
+    "regulatory_screening": "regulations",
+    "impact_analysis": "impact_matrix",
+    "report_synthesis": "report",
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -346,10 +354,14 @@ def stream_eia_pipeline(
                 logger.info("[GRAPH] ← Node %s complete", agent_key)
                 yield from _flush_logs()
 
+                output_key = AGENT_OUTPUT_KEYS.get(agent_key)
+                agent_output = state.get(output_key) if output_key else None
+
                 yield _sse_event("agent_complete", {
                     "agent": agent_key,
                     "pipeline_status": dict(pipeline_status),
                     "steps": agent_steps[agent_key],
+                    "output": agent_output,
                 })
 
             except Exception as exc:

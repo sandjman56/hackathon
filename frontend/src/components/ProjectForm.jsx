@@ -96,28 +96,24 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
     switch (eventType) {
       case 'pipeline_start':
         if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
-        if (data.agent_steps) onStepsUpdate?.(data.agent_steps)
         break
 
       case 'agent_start':
         if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
-        if (data.steps) {
-          onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.steps }))
-        }
         break
 
       case 'agent_step':
-        if (data.steps) {
-          onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.steps }))
-        }
         break
 
       case 'agent_complete':
+        if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
+        if (data.output !== undefined) {
+          onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.output }))
+        }
+        break
+
       case 'agent_error':
         if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
-        if (data.steps) {
-          onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.steps }))
-        }
         break
 
       case 'result':
