@@ -2,7 +2,7 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 from pydantic import BaseModel
@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from llm.provider_factory import get_llm_provider, get_embedding_provider
 from pipeline import stream_eia_pipeline, cancel_pipeline
+from db.vector_store import init_db, _get_connection
 
 load_dotenv()
 
@@ -33,6 +34,7 @@ logger = logging.getLogger("eia")
 async def lifespan(app: FastAPI):
     print("[LIFESPAN] Initialising LLM providers…", flush=True, file=sys.stdout)
     try:
+        init_db()
         llm = get_llm_provider()
         emb = get_embedding_provider()
     except Exception as exc:
@@ -93,3 +95,66 @@ def run_pipeline(req: RunRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class SaveProjectRequest(BaseModel):
+    name: str
+    coordinates: str
+    description: str
+
+
+@app.get("/api/projects")
+def list_projects():
+    conn = _get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, name, coordinates, description, saved_at FROM projects ORDER BY saved_at DESC"
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "coordinates": r[2],
+            "description": r[3],
+            "savedAt": r[4].isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/projects", status_code=201)
+def save_project(req: SaveProjectRequest):
+    conn = _get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO projects (name, coordinates, description) VALUES (%s, %s, %s) RETURNING id, saved_at",
+        (req.name, req.coordinates, req.description),
+    )
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {
+        "id": row[0],
+        "name": req.name,
+        "coordinates": req.coordinates,
+        "description": req.description,
+        "savedAt": row[1].isoformat(),
+    }
+
+
+@app.delete("/api/projects/{project_id}", status_code=204)
+def delete_project(project_id: int):
+    conn = _get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+    if cur.rowcount == 0:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Project not found")
+    conn.commit()
+    cur.close()
+    conn.close()

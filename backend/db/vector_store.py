@@ -31,6 +31,15 @@ def init_db():
                 embedding vector(1536)
             );
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                coordinates TEXT NOT NULL,
+                description TEXT,
+                saved_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        """)
         conn.commit()
         cur.close()
         conn.close()

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const PRESET_LOCATIONS = [
   { label: 'New York City', coordinates: '40.7128, -74.0060' },
@@ -19,6 +19,53 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
   const [coordinates, setCoordinates] = useState('')
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
+  const [savedProjects, setSavedProjects] = useState([])
+  const [saveFlash, setSaveFlash] = useState(false)
+
+  const apiBase = import.meta.env.VITE_API_URL ?? ''
+
+  useEffect(() => {
+    fetch(`${apiBase}/api/projects`)
+      .then((r) => r.json())
+      .then(setSavedProjects)
+      .catch(() => {})
+  }, [])
+
+  const handleSave = async () => {
+    if (!projectName.trim()) return
+    try {
+      const res = await fetch(`${apiBase}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: projectName.trim(),
+          coordinates: coordinates.trim(),
+          description: description.trim(),
+        }),
+      })
+      const project = await res.json()
+      setSavedProjects((prev) => [project, ...prev])
+      setSaveFlash(true)
+      setTimeout(() => setSaveFlash(false), 1200)
+    } catch {
+      // best-effort
+    }
+  }
+
+  const handleLoad = (project) => {
+    setProjectName(project.name)
+    setCoordinates(project.coordinates)
+    setDescription(project.description)
+  }
+
+  const handleDelete = async (id) => {
+    try {
+      await fetch(`${apiBase}/api/projects/${id}`, { method: 'DELETE' })
+      setSavedProjects((prev) => prev.filter((p) => p.id !== id))
+    } catch {
+      // best-effort
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -209,7 +256,53 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
             'RUN PIPELINE'
           )}
         </button>
+
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!projectName.trim()}
+          style={{
+            ...styles.saveBtn,
+            ...(saveFlash ? styles.saveBtnFlash : {}),
+            ...(!projectName.trim() ? styles.saveBtnDisabled : {}),
+          }}
+        >
+          {saveFlash ? 'SAVED!' : 'SAVE PROJECT'}
+        </button>
       </form>
+
+      {savedProjects.length > 0 && (
+        <div style={styles.savedSection}>
+          <div style={styles.savedHeader}>SAVED PROJECTS</div>
+          {savedProjects.map((p) => (
+            <div key={p.id} style={styles.savedItem}>
+              <div style={styles.savedItemMain}>
+                <span style={styles.savedName}>{p.name}</span>
+                <span style={styles.savedCoords}>{p.coordinates}</span>
+                {p.description && (
+                  <span style={styles.savedDesc}>{p.description}</span>
+                )}
+              </div>
+              <div style={styles.savedActions}>
+                <button
+                  type="button"
+                  style={styles.actionBtn}
+                  onClick={() => handleLoad(p)}
+                >
+                  LOAD
+                </button>
+                <button
+                  type="button"
+                  style={{ ...styles.actionBtn, ...styles.actionBtnDelete }}
+                  onClick={() => handleDelete(p.id)}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -327,5 +420,102 @@ const styles = {
     borderTop: '2px solid #0a0a0a',
     borderRadius: '50%',
     animation: 'spin 0.8s linear infinite',
+  },
+  saveBtn: {
+    width: '100%',
+    marginTop: '8px',
+    padding: '10px',
+    background: 'transparent',
+    color: 'var(--green-primary)',
+    border: '1px solid var(--green-primary)',
+    borderRadius: '4px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '12px',
+    fontWeight: 600,
+    letterSpacing: '2px',
+    cursor: 'pointer',
+    transition: 'background 0.15s, color 0.15s',
+  },
+  saveBtnFlash: {
+    background: 'var(--green-primary)',
+    color: '#0a0a0a',
+  },
+  saveBtnDisabled: {
+    opacity: 0.3,
+    cursor: 'not-allowed',
+  },
+  savedSection: {
+    marginTop: '16px',
+    borderTop: '1px solid var(--border)',
+    paddingTop: '16px',
+  },
+  savedHeader: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    letterSpacing: '3px',
+    marginBottom: '10px',
+  },
+  savedItem: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '8px',
+    padding: '10px',
+    marginBottom: '6px',
+    background: 'var(--bg-primary)',
+    border: '1px solid var(--border)',
+    borderRadius: '4px',
+  },
+  savedItemMain: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    flex: 1,
+    minWidth: 0,
+  },
+  savedName: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '12px',
+    color: 'var(--text-primary)',
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  savedCoords: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: 'var(--green-primary)',
+  },
+  savedDesc: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  savedActions: {
+    display: 'flex',
+    gap: '4px',
+    flexShrink: 0,
+  },
+  actionBtn: {
+    padding: '3px 8px',
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    borderRadius: '3px',
+    color: 'var(--text-secondary)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    cursor: 'pointer',
+    letterSpacing: '0.5px',
+    transition: 'border-color 0.15s, color 0.15s',
+  },
+  actionBtnDelete: {
+    fontSize: '14px',
+    padding: '1px 7px',
+    lineHeight: 1,
   },
 }
