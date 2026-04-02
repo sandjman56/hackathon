@@ -45,7 +45,8 @@ function App() {
   const handleCommand = async (cmd) => {
     if (cmd === '/q') {
       try {
-        await fetch('/api/cancel', { method: 'POST' })
+        const apiBase = import.meta.env.VITE_API_URL ?? ''
+        await fetch(`${apiBase}/api/cancel`, { method: 'POST' })
       } catch {
         // best-effort
       }

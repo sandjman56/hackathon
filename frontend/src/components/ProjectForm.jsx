@@ -31,7 +31,8 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
     onStepsUpdate?.({})
 
     try {
-      const res = await fetch('/api/run', {
+      const apiBase = import.meta.env.VITE_API_URL ?? ''
+      const res = await fetch(`${apiBase}/api/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
