@@ -30,7 +30,7 @@ def _bbox_polygon(lat: float, lon: float, delta: float = _BUFFER_DEG) -> list:
 
 def _query_usfws(lat: float, lon: float, client: httpx.Client) -> dict:
     """Query USFWS IPaC for threatened and endangered species near the project location."""
-    url = "https://ipac.ecosphere.fws.gov/location/api/species"
+    url = "https://ipac.ecosphere.fws.gov/location/api/resources"
     logger.info("[USFWS] POST %s — bbox ~1km around (%.4f, %.4f)", url, lat, lon)
     payload = {
         "type": "FeatureCollection",
@@ -48,12 +48,16 @@ def _query_usfws(lat: float, lon: float, client: httpx.Client) -> dict:
     resp.raise_for_status()
     data = resp.json()
 
+    # /resources returns a list of resource objects, each with a "species" list
+    species_list = []
     if isinstance(data, list):
-        species_list = data
+        for resource in data:
+            species_list.extend(resource.get("species", []))
     elif isinstance(data, dict):
-        species_list = data.get("species", data.get("items", []))
-    else:
-        species_list = []
+        for resource in data.get("resources", []):
+            species_list.extend(resource.get("species", []))
+        if not species_list:
+            species_list = data.get("species", data.get("items", []))
 
     result = {
         "count": len(species_list),
@@ -118,7 +122,7 @@ def _query_nwi(lat: float, lon: float, client: httpx.Client) -> dict:
 def _query_fema(lat: float, lon: float, client: httpx.Client) -> dict:
     """Query FEMA National Flood Hazard Layer for the project location's flood zone."""
     url = (
-        "https://hazards.fema.gov/gis/nfhl/rest/services"
+        "https://hazards.fema.gov/arcgis/rest/services"
         "/public/NFHL/MapServer/28/query"
     )
     logger.info("[FEMA] GET %s — point (%.4f, %.4f)", url, lat, lon)
@@ -126,7 +130,7 @@ def _query_fema(lat: float, lon: float, client: httpx.Client) -> dict:
         "geometry": f"{lon},{lat}",
         "geometryType": "esriGeometryPoint",
         "inSR": "4326",
-        "spatialRel": "esriSpatialRelWithin",
+        "spatialRel": "esriSpatialRelIntersects",
         "outFields": "FLD_ZONE,ZONE_SUBTY,SFHA_TF",
         "returnGeometry": "false",
         "f": "json",
@@ -156,7 +160,7 @@ def _query_fema(lat: float, lon: float, client: httpx.Client) -> dict:
 
 def _query_usda_farmland(lat: float, lon: float, client: httpx.Client) -> dict:
     """Query USDA NRCS SSURGO (Soil Data Access) for prime farmland classification."""
-    url = "https://sdmdataaccess.nrcs.usda.gov/tabular/post.rest"
+    url = "https://SDMDataAccess.sc.egov.usda.gov/Tabular/post.rest"
     logger.info("[USDA] POST %s — SSURGO farmland query at (%.4f, %.4f)", url, lat, lon)
     query = (
         f"SELECT mu.muname, c.farmlndcl "
@@ -195,50 +199,89 @@ def _query_usda_farmland(lat: float, lon: float, client: httpx.Client) -> dict:
     return result
 
 
-def _query_ejscreen(lat: float, lon: float, client: httpx.Client) -> dict:
-    """Query EPA EJScreen for environmental justice indicators at the project location."""
-    url = "https://ejscreen.epa.gov/mapper/ejscreenRESTbroker.aspx"
-    logger.info("[EJScreen] GET %s — 1-mile radius from (%.4f, %.4f)", url, lat, lon)
-    params = {
-        "namestr": "",
-        "geometry": (
-            f'{{"spatialReference":{{"wkid":4326}},"x":{lon},"y":{lat}}}'
-        ),
-        "distance": "1",
-        "unit": "9035",  # esriSRUnit_StatuteMile
-        "areatype": "",
-        "areaid": "",
-        "f": "pjson",
-    }
-    resp = client.get(url, params=params, timeout=30)
-    logger.info("[EJScreen] Response: HTTP %d", resp.status_code)
-    resp.raise_for_status()
-    data = resp.json()
+def _query_census_ej(lat: float, lon: float, client: httpx.Client) -> dict:
+    """Query Census ACS 5-year estimates for environmental justice demographic indicators.
 
-    features = (
-        data.get("data", {})
-            .get("map", {})
-            .get("features", [{}])
+    Replaces EPA EJScreen (taken offline Feb 2025). Two-step:
+      1. Census Geocoder — resolve (lat, lon) to state/county/tract FIPS
+      2. ACS 5-year — pull poverty and race/ethnicity variables for that tract
+    """
+    # Step 1: geocode to census tract
+    geo_url = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
+    logger.info("[Census] GET %s — resolving tract for (%.4f, %.4f)", geo_url, lat, lon)
+    geo_resp = client.get(geo_url, params={
+        "x": lon,
+        "y": lat,
+        "benchmark": "Public_AR_Current",
+        "vintage": "Current_Current",
+        "format": "json",
+    }, timeout=30)
+    logger.info("[Census] Geocoder response: HTTP %d", geo_resp.status_code)
+    geo_resp.raise_for_status()
+
+    tracts = (
+        geo_resp.json()
+        .get("result", {})
+        .get("geographies", {})
+        .get("Census Tracts", [])
     )
-    attrs = features[0].get("attributes", {}) if features else {}
-    if not attrs:
-        attrs = data.get("RAW_DATA", {})
+    if not tracts:
+        raise ValueError("Census geocoder returned no tract for coordinates")
+
+    state = tracts[0]["STATE"]
+    county = tracts[0]["COUNTY"]
+    tract = tracts[0]["TRACT"]
+    logger.info("[Census] Tract: state=%s county=%s tract=%s", state, county, tract)
+
+    # Step 2: ACS 5-year demographic variables
+    # B03002: race/ethnicity — total vs white-alone non-Hispanic (for minority %)
+    # B17001: poverty status — total vs below poverty level (for low-income %)
+    acs_vars = [
+        "B03002_001E",  # race/ethnicity universe total
+        "B03002_003E",  # white alone, not Hispanic or Latino
+        "B17001_001E",  # poverty universe total
+        "B17001_002E",  # income below poverty level
+    ]
+    acs_url = "https://api.census.gov/data/2023/acs/acs5"
+    logger.info("[Census] GET %s — tract %s%s%s", acs_url, state, county, tract)
+    acs_resp = client.get(acs_url, params={
+        "get": ",".join(acs_vars),
+        "for": f"tract:{tract}",
+        "in": f"state:{state} county:{county}",
+    }, timeout=30)
+    logger.info("[Census] ACS response: HTTP %d", acs_resp.status_code)
+    acs_resp.raise_for_status()
+
+    rows = acs_resp.json()
+    vals = dict(zip(rows[0], rows[1]))
+
+    race_total = int(vals.get("B03002_001E") or 0)
+    white_nh = int(vals.get("B03002_003E") or 0)
+    poverty_total = int(vals.get("B17001_001E") or 0)
+    below_poverty = int(vals.get("B17001_002E") or 0)
+
+    minority_pct = round((race_total - white_nh) / race_total, 4) if race_total > 0 else None
+    low_income_pct = round(below_poverty / poverty_total, 4) if poverty_total > 0 else None
 
     result = {
-        "percentile_pm25": attrs.get("P_PM25"),
-        "percentile_ozone": attrs.get("P_OZONE"),
-        "percentile_lead_paint": attrs.get("P_LDPNT"),
-        "percentile_superfund": attrs.get("P_PNPL"),
-        "percentile_wastewater": attrs.get("P_PWDIS"),
-        "ej_index": attrs.get("EJSCREEN_SCORE"),
-        "low_income_pct": attrs.get("LOWINCPCT"),
-        "minority_pct": attrs.get("MINORPCT"),
+        "source": "Census ACS 5-year (2023)",
+        "census_tract": f"{state}{county}{tract}",
+        "minority_pct": minority_pct,
+        "low_income_pct": low_income_pct,
+        # EJScreen air/hazard percentiles are unavailable (EPA service offline Feb 2025)
+        "percentile_pm25": None,
+        "percentile_ozone": None,
+        "percentile_lead_paint": None,
+        "percentile_superfund": None,
+        "percentile_wastewater": None,
+        "ej_index": None,
     }
-    ej = result["ej_index"]
-    pm = result["percentile_pm25"]
-    logger.info("[EJScreen] EJ Index: %s  |  PM2.5 percentile: %s  |  "
-                "Low-income: %s  |  Minority: %s",
-                ej, pm, result["low_income_pct"], result["minority_pct"])
+    logger.info(
+        "[Census] Tract %s — minority: %.1f%%  low-income: %.1f%%",
+        result["census_tract"],
+        (minority_pct or 0) * 100,
+        (low_income_pct or 0) * 100,
+    )
     return result
 
 
@@ -247,7 +290,7 @@ _API_CALLS = [
     ("nwi_wetlands", _query_nwi),
     ("fema_flood_zones", _query_fema),
     ("usda_farmland", _query_usda_farmland),
-    ("ejscreen", _query_ejscreen),
+    ("ejscreen", _query_census_ej),
 ]
 
 
@@ -265,7 +308,7 @@ class EnvironmentalDataAgent:
         logger.info("[EnvironmentalData] Starting — querying 5 federal APIs")
         logger.info("[EnvironmentalData] Location: lat=%.6f  lon=%.6f", lat, lon)
         logger.info("[EnvironmentalData] APIs: USFWS IPaC, NWI, FEMA NFHL, "
-                    "USDA SSURGO, EPA EJScreen")
+                    "USDA SSURGO, Census ACS (EJ demographics)")
 
         results: dict = {
             "query_location": {"lat": lat, "lon": lon},
