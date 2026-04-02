@@ -16,6 +16,7 @@ function App() {
   const [pipelineState, setPipelineState] = useState(
     Object.fromEntries(AGENTS.map((a) => [a, 'idle']))
   )
+  const [agentOutputs, setAgentOutputs] = useState({})
   const [results, setResults]   = useState(null)
   const [logs, setLogs]         = useState([])
   const [running, setRunning]   = useState(false)
@@ -28,6 +29,10 @@ function App() {
 
   const handlePipelineUpdate = (state) => {
     setPipelineState(state)
+  }
+
+  const handleStepsUpdate = (updater) => {
+    setAgentOutputs(typeof updater === 'function' ? updater : () => updater)
   }
 
   const handleLog = (entry) => {
@@ -76,6 +81,7 @@ function App() {
           <ProjectForm
             onResult={handleResult}
             onPipelineUpdate={handlePipelineUpdate}
+            onStepsUpdate={handleStepsUpdate}
             onLog={handleLog}
             onRunningChange={handleRunningChange}
           />
@@ -86,7 +92,7 @@ function App() {
         {/* Middle: pipeline status + results */}
         <div style={styles.colMiddle}>
           <div style={styles.colMiddleTop}>
-            <AgentPipeline pipelineState={pipelineState} />
+            <AgentPipeline pipelineState={pipelineState} agentOutputs={agentOutputs} />
           </div>
           <div style={styles.colMiddleBottom}>
             <ResultsPanel results={results} />
