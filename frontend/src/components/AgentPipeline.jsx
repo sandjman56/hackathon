@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import SourcesModal from './SourcesModal.jsx'
 
 const AGENTS = [
   { key: 'project_parser', name: 'PROJECT PARSER' },
@@ -236,6 +237,7 @@ function renderAgentOutput(agentKey, data) {
 
 export default function AgentPipeline({ pipelineState, agentOutputs = {} }) {
   const [openAgent, setOpenAgent] = useState(null)
+  const [sourcesOpen, setSourcesOpen] = useState(false)
 
   const toggleAgent = (key) => {
     setOpenAgent((prev) => (prev === key ? null : key))
@@ -250,6 +252,7 @@ export default function AgentPipeline({ pipelineState, agentOutputs = {} }) {
           const output = agentOutputs[agent.key]
           const isOpen = openAgent === agent.key
           const hasOutput = output !== undefined && output !== null
+          const isRegulatory = agent.key === 'regulatory_screening'
 
           return (
             <div key={agent.key}>
@@ -263,6 +266,19 @@ export default function AgentPipeline({ pipelineState, agentOutputs = {} }) {
               >
                 <span style={getDotStyle(status)} />
                 <span style={styles.agentName}>{agent.name}</span>
+                {isRegulatory && (
+                  <button
+                    type="button"
+                    style={styles.sourcesBtn}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setSourcesOpen(true)
+                    }}
+                    title="View regulatory source documents"
+                  >
+                    VIEW SOURCES
+                  </button>
+                )}
                 <span style={styles.statusText}>
                   {status === 'complete' && 'DONE'}
                   {status === 'running' && 'RUNNING'}
@@ -287,6 +303,10 @@ export default function AgentPipeline({ pipelineState, agentOutputs = {} }) {
           )
         })}
       </div>
+
+      {sourcesOpen && (
+        <SourcesModal onClose={() => setSourcesOpen(false)} />
+      )}
     </div>
   )
 }
@@ -337,6 +357,18 @@ const styles = {
     fontFamily: 'var(--font-mono)',
     fontSize: '12px',
     color: 'var(--green-primary)',
+    flexShrink: 0,
+  },
+  sourcesBtn: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '9px',
+    letterSpacing: '1px',
+    color: 'var(--green-primary)',
+    background: 'transparent',
+    border: '1px solid var(--green-primary)',
+    borderRadius: '3px',
+    padding: '3px 8px',
+    cursor: 'pointer',
     flexShrink: 0,
   },
   connector: {

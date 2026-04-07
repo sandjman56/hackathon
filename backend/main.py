@@ -8,9 +8,20 @@ from starlette.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+from pathlib import Path
+
 from llm.provider_factory import get_llm_provider, get_embedding_provider
 from pipeline import stream_eia_pipeline, cancel_pipeline
 from db.vector_store import init_db, _get_connection
+from rag.regulatory.parser import parse_pdf
+from rag.regulatory.chunker import chunk_sections
+from rag.regulatory.embedder import detect_embedding_dimension, embed_chunks
+from rag.regulatory.store import (
+    DEFAULT_TABLE,
+    build_metadata,
+    init_regulatory_table,
+    upsert_chunks,
+)
 
 load_dotenv()
 
@@ -158,3 +169,105 @@ def delete_project(project_id: int):
     conn.commit()
     cur.close()
     conn.close()
+
+
+# --- Regulatory sources (PDF discovery + ingestion) ----------------------
+
+_BACKEND_DIR = Path(__file__).resolve().parent
+
+
+def _ingested_counts_by_source_file() -> dict[str, int]:
+    """Return {source_file: chunk_count} from the regulatory_chunks table."""
+    try:
+        conn = _get_connection()
+    except Exception as exc:
+        logger.warning("ingested_counts: DB unavailable: %s", exc)
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT to_regclass('public.{DEFAULT_TABLE}')"
+        )
+        if cur.fetchone()[0] is None:
+            return {}
+        cur.execute(
+            f"""
+            SELECT metadata->>'source_file' AS source_file, COUNT(*)
+            FROM {DEFAULT_TABLE}
+            GROUP BY metadata->>'source_file'
+            """
+        )
+        return {row[0]: int(row[1]) for row in cur.fetchall() if row[0]}
+    finally:
+        conn.close()
+
+
+@app.get("/api/regulations/sources")
+def list_regulatory_sources():
+    """List PDFs found in the backend directory and their ingestion status."""
+    pdfs = sorted(_BACKEND_DIR.glob("*.pdf"))
+    counts = _ingested_counts_by_source_file()
+    out = []
+    for p in pdfs:
+        stat = p.stat()
+        out.append({
+            "filename": p.name,
+            "size_bytes": stat.st_size,
+            "ingested_chunks": counts.get(p.name, 0),
+        })
+    return {"sources": out}
+
+
+class IngestRequest(BaseModel):
+    filename: str
+    is_current: bool = False
+
+
+@app.post("/api/regulations/ingest")
+def ingest_regulatory_pdf(req: IngestRequest):
+    """Parse, chunk, embed, and upsert one PDF into regulatory_chunks."""
+    pdf_path = (_BACKEND_DIR / req.filename).resolve()
+    # Confine to backend dir.
+    if _BACKEND_DIR not in pdf_path.parents or not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+    if pdf_path.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Not a PDF file")
+
+    logger.info("[ingest] parsing %s", pdf_path.name)
+    sections, parser_warnings = parse_pdf(str(pdf_path))
+    chunks = chunk_sections(sections)
+    logger.info(
+        "[ingest] %s -> %d sections, %d chunks, %d warnings",
+        pdf_path.name, len(sections), len(chunks), len(parser_warnings),
+    )
+
+    provider = app.state.embedding_provider
+    dim = detect_embedding_dimension(provider)
+
+    import asyncio as _asyncio
+    embeddings = _asyncio.run(embed_chunks(chunks, provider, concurrency=4))
+
+    conn = _get_connection()
+    try:
+        init_regulatory_table(conn, embedding_dim=dim)
+        rows = []
+        for chunk, (breadcrumb, vec) in zip(chunks, embeddings):
+            meta = build_metadata(
+                chunk,
+                breadcrumb,
+                source=pdf_path.stem,
+                source_file=pdf_path.name,
+                is_current=req.is_current,
+            )
+            rows.append((chunk, breadcrumb, vec, meta))
+        written = upsert_chunks(conn, rows)
+    finally:
+        conn.close()
+
+    return {
+        "filename": pdf_path.name,
+        "sections": len(sections),
+        "chunks_written": written,
+        "parser_warnings": len(parser_warnings),
+        "embedding_dim": dim,
+    }
