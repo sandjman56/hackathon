@@ -343,3 +343,116 @@ def delete_regulatory_source(source_id: str):
         return {"deleted_chunks": deleted_chunks}
     finally:
         conn.close()
+
+
+# --- Database browser endpoints -------------------------------------------
+
+def _get_public_tables(conn):
+    """Return a list of user table names in the public schema."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+        ORDER BY table_name
+    """)
+    tables = [row[0] for row in cur.fetchall()]
+    cur.close()
+    return tables
+
+
+@app.get("/api/db/tables")
+def list_db_tables():
+    conn = _get_connection()
+    try:
+        tables = _get_public_tables(conn)
+        cur = conn.cursor()
+        result = []
+        for table_name in tables:
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = %s",
+                (table_name,),
+            )
+            col_count = cur.fetchone()[0]
+            cur.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+            row_count = cur.fetchone()[0]
+            result.append({
+                "name": table_name,
+                "row_count": row_count,
+                "column_count": col_count,
+            })
+        cur.close()
+        return result
+    finally:
+        conn.close()
+
+
+@app.get("/api/db/tables/{table_name}")
+def get_db_table(table_name: str, page: int = 1, per_page: int = 25):
+    conn = _get_connection()
+    try:
+        valid_tables = _get_public_tables(conn)
+        if table_name not in valid_tables:
+            raise HTTPException(status_code=404, detail="Table not found")
+
+        cur = conn.cursor()
+
+        # Get columns
+        cur.execute(
+            "SELECT column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s "
+            "ORDER BY ordinal_position",
+            (table_name,),
+        )
+        columns = [{"name": r[0], "type": r[1]} for r in cur.fetchall()]
+
+        # Total row count
+        cur.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+        total_rows = cur.fetchone()[0]
+
+        # Paginated rows — cast every column to TEXT for JSON safety
+        col_names = [c["name"] for c in columns]
+        select_exprs = ", ".join(f'"{c}"::text' for c in col_names)
+        offset = (page - 1) * per_page
+        cur.execute(
+            f'SELECT {select_exprs} FROM "{table_name}" LIMIT %s OFFSET %s',
+            (per_page, offset),
+        )
+        rows = [list(r) for r in cur.fetchall()]
+
+        total_pages = max(1, (total_rows + per_page - 1) // per_page)
+        cur.close()
+
+        return {
+            "table_name": table_name,
+            "columns": columns,
+            "rows": rows,
+            "total_rows": total_rows,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages,
+        }
+    finally:
+        conn.close()
+
+
+@app.delete("/api/db/tables/{table_name}/rows")
+def clear_db_table(table_name: str):
+    conn = _get_connection()
+    try:
+        valid_tables = _get_public_tables(conn)
+        if table_name not in valid_tables:
+            raise HTTPException(status_code=404, detail="Table not found")
+
+        cur = conn.cursor()
+        cur.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+        count = cur.fetchone()[0]
+        cur.execute(f'TRUNCATE "{table_name}" CASCADE')
+        conn.commit()
+        cur.close()
+        return {"table_name": table_name, "deleted_count": count}
+    finally:
+        conn.close()
