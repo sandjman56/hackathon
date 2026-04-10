@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable, Optional
 
 from .breadcrumbs import build_breadcrumb
 from .chunker import Chunk
@@ -41,6 +41,7 @@ async def embed_chunks(
     chunks: list[Chunk],
     provider: Any,
     concurrency: int = 4,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> list[tuple[str, list[float]]]:
     """Embed many chunks with bounded concurrency.
 
@@ -50,25 +51,42 @@ async def embed_chunks(
         concurrency: Max in-flight embedding calls. Most providers
             (Gemini free tier, OpenAI) rate-limit aggressively, so 4 is
             a safe default.
+        on_progress: Optional callback fired after each chunk completes,
+            invoked with ``(done, total)``. Used by the ingestion task
+            to update the live progress counter on a sources row.
 
     Returns:
         A list of ``(breadcrumb, vector)`` tuples in the same order as
         the input chunks.
     """
     sem = asyncio.Semaphore(concurrency)
+    total = len(chunks)
+    done = 0
+    done_lock = asyncio.Lock()
+    results: list[Optional[tuple[str, list[float]]]] = [None] * total
 
-    async def _one(c: Chunk) -> tuple[str, list[float]]:
+    async def _one(idx: int, c: Chunk) -> None:
+        nonlocal done
         async with sem:
             try:
-                return await embed_chunk(c, provider)
+                results[idx] = await embed_chunk(c, provider)
             except Exception:
                 logger.exception(
                     "Embedding failed for %s",
                     c.sources[0].citation if c.sources else "<unknown>",
                 )
                 raise
+        if on_progress is not None:
+            async with done_lock:
+                done += 1
+                try:
+                    on_progress(done, total)
+                except Exception:
+                    logger.exception("on_progress callback raised; ignoring")
 
-    return await asyncio.gather(*(_one(c) for c in chunks))
+    await asyncio.gather(*(_one(i, c) for i, c in enumerate(chunks)))
+    # results is now fully populated
+    return [r for r in results if r is not None]
 
 
 def detect_embedding_dimension(provider: Any) -> int:
