@@ -77,11 +77,12 @@ logger = logging.getLogger("eia.scripts.ingest_regulations")
 )
 @click.option(
     "--is-current/--not-current",
-    default=False,
+    default=True,
     show_default=True,
     help=(
-        "Mark this corpus as current authoritative law. The 2005 reprint of "
-        "the 1978 NEPA regs is NOT current — leave the default."
+        "Mark this corpus as current authoritative law. Pass --not-current "
+        "for superseded or historical versions (e.g. the 2005 reprint of "
+        "the 1978 NEPA regs)."
     ),
 )
 @click.option(
