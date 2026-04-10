@@ -131,6 +131,7 @@ class TestGetBytes:
 
 class TestDeleteCascade:
     def test_cascade_delete_chunks(self, initialized_db):
+        pytest.importorskip("pymupdf")
         # Create the regulatory_chunks table out-of-band so the cascade
         # has something to find.
         from rag.regulatory.store import init_regulatory_table

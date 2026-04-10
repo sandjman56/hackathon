@@ -90,18 +90,18 @@ def insert_source(
     blob: bytes,
     is_current: bool,
 ) -> dict:
-    """Insert a row, or return the existing one if sha256 already exists."""
-    existing = find_by_sha256(conn, sha256)
-    if existing is not None:
-        logger.info("insert_source: dedup hit for sha256=%s", sha256[:12])
-        return existing
+    """Insert a row, or return the existing one if sha256 already exists.
 
+    Race-free: uses ON CONFLICT with a no-op DO UPDATE so that RETURNING
+    fires whether we inserted a new row or hit an existing one.
+    """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"""
             INSERT INTO {TABLE}
                 (filename, sha256, size_bytes, bytes, is_current)
             VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (sha256) DO UPDATE SET sha256 = EXCLUDED.sha256
             RETURNING {_LIST_COLUMNS};
             """,
             (filename, sha256, size_bytes, psycopg2.Binary(blob), is_current),

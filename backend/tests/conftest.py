@@ -32,14 +32,27 @@ def _require_test_db() -> str:
 
 @pytest.fixture
 def db_conn():
+    """Yield a psycopg2 connection that rolls back everything on teardown.
+
+    Repo functions call ``conn.commit()`` after each write. That would
+    persist state across tests, so we monkey-patch ``commit`` to a no-op
+    for the life of the fixture. All work happens inside the single
+    fixture-scoped transaction, and the ``rollback()`` in ``finally``
+    undoes it on teardown — leaving the DB clean for the next test.
+    """
     url = _require_test_db()
     conn = psycopg2.connect(url)
     conn.autocommit = False
+    original_commit = conn.commit
+    conn.commit = lambda: None  # type: ignore[method-assign]
     try:
         yield conn
     finally:
-        conn.rollback()
-        conn.close()
+        conn.commit = original_commit  # type: ignore[method-assign]
+        try:
+            conn.rollback()
+        finally:
+            conn.close()
 
 
 @pytest.fixture
