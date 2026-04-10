@@ -1,22 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-// Vitest/@testing-library compatibility shim (test-only, no-op in prod):
-// @testing-library/dom's waitFor detects fake timers via `typeof jest !== 'undefined'`.
-// Under vitest, `vi` exists instead of `jest`, so waitFor falls back to its
-// real-timer path AND @testing-library/react's asyncWrapper drains via
-// `setTimeout(0)`, which IS faked by vi.useFakeTimers() → causes indefinite
-// hangs in tests that combine fake timers with waitFor. Aliasing jest → vi
-// lets testing-library take the fake-timer path which advances timers via
-// jest.advanceTimersByTime. The `vi` global only exists in vitest, so this
-// block is dead code in production bundles.
-if (
-  typeof globalThis !== 'undefined' &&
-  typeof globalThis.vi !== 'undefined' &&
-  typeof globalThis.jest === 'undefined'
-) {
-  globalThis.jest = globalThis.vi
-}
-
 const apiBase = import.meta.env.VITE_API_URL ?? ''
 const POLL_INTERVAL_MS = 2000
 const MAX_BYTES = 25 * 1024 * 1024
