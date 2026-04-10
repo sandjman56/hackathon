@@ -15,6 +15,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Iterator, Optional
 
 import pymupdf
@@ -294,18 +295,25 @@ _EFFECTIVE_DATES = {
 }
 
 
-def parse_pdf(pdf_path: str) -> tuple[list[RawSection], list[str]]:
+def parse_pdf(pdf_source: "str | bytes | Path") -> tuple[list[RawSection], list[str]]:
     """Parse a NEPA-style legal PDF into ordered RawSection records.
 
     Args:
-        pdf_path: Filesystem path to the PDF.
+        pdf_source: Either a filesystem path (``str`` / ``Path``) or the
+            raw PDF bytes. Bytes are passed through to PyMuPDF as a
+            stream so callers don't have to write to disk.
 
     Returns:
         ``(sections, warnings)`` — ``sections`` is the ordered list of
         :class:`RawSection`; ``warnings`` collects character-recovery
         diagnostics and any unclassified bold headers we encountered.
     """
-    doc = pymupdf.open(pdf_path)
+    if isinstance(pdf_source, (bytes, bytearray)):
+        doc = pymupdf.open(stream=bytes(pdf_source), filetype="pdf")
+        _source_label = f"<bytes len={len(pdf_source)}>"
+    else:
+        doc = pymupdf.open(str(pdf_source))
+        _source_label = str(pdf_source)
     warnings: list[str] = []
 
     # Build the full ordered span stream across all pages
@@ -564,7 +572,7 @@ def parse_pdf(pdf_path: str) -> tuple[list[RawSection], list[str]]:
     logger.info(
         "Parsed %d sections from %s (warnings=%d)",
         len(sections),
-        pdf_path,
+        _source_label,
         len(warnings),
     )
     return sections, warnings

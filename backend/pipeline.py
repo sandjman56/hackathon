@@ -148,9 +148,12 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider):
+def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_provider: LLMProvider):
     """Create a LangGraph node function wrapping an agent's .run() call."""
-    agent = agent_class(llm)
+    if agent_key == "regulatory_screening":
+        agent = agent_class(llm, embedding_provider)
+    else:
+        agent = agent_class(llm)
 
     def node_fn(state: EIAPipelineState) -> dict:
         logger.info("[GRAPH] Entering node: %s", agent_key)
@@ -178,11 +181,11 @@ def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider):
     return node_fn
 
 
-def build_pipeline(llm: LLMProvider):
+def build_pipeline(llm: LLMProvider, embedding_provider: LLMProvider):
     """Construct and compile the EIA LangGraph pipeline."""
     graph = StateGraph(EIAPipelineState)
     for agent_key, agent_class in AGENT_REGISTRY:
-        graph.add_node(agent_key, _make_agent_node(agent_key, agent_class, llm))
+        graph.add_node(agent_key, _make_agent_node(agent_key, agent_class, llm, embedding_provider))
     prev = START
     for agent_key, _ in AGENT_REGISTRY:
         graph.add_edge(prev, agent_key)
@@ -196,8 +199,9 @@ def run_eia_pipeline(
     coordinates: str,
     description: str,
     llm: LLMProvider,
+    embedding_provider: LLMProvider,
 ) -> dict:
-    compiled = build_pipeline(llm)
+    compiled = build_pipeline(llm, embedding_provider)
     initial_state: EIAPipelineState = {
         "project_name": project_name,
         "coordinates": coordinates,
@@ -228,6 +232,7 @@ def stream_eia_pipeline(
     coordinates: str,
     description: str,
     llm: LLMProvider,
+    embedding_provider: LLMProvider,
 ):
     """Execute the EIA pipeline as a generator yielding SSE events.
 
@@ -298,7 +303,10 @@ def stream_eia_pipeline(
                 })
                 return
 
-            agent = agent_class(llm)
+            if agent_key == "regulatory_screening":
+                agent = agent_class(llm, embedding_provider)
+            else:
+                agent = agent_class(llm)
             steps = AGENT_STEPS.get(agent_key, [])
 
             # ── Agent start ───────────────────────────────────────────────────

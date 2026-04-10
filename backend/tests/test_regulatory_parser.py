@@ -32,6 +32,9 @@ from rag.regulatory.parser import (  # noqa: E402
 from rag.regulatory.store import build_metadata  # noqa: E402
 from rag.regulatory.xref import extract_cross_references  # noqa: E402
 
+# Module-level constant reused by any test that needs the real seed PDF.
+SEED_PDF = Path(__file__).resolve().parent.parent / "NEPA-40CFR1500_1508.pdf"
+
 
 # --- factories ------------------------------------------------------------
 
@@ -359,6 +362,20 @@ class TestRealPdfSmoke(unittest.TestCase):
             self.assertIsInstance(meta["page_numbers"], list)
             self.assertGreater(len(meta["page_numbers"]), 0)
             self.assertEqual(meta["is_current"], False)
+
+
+class TestParsePdfFromBytes(unittest.TestCase):
+    """parse_pdf must accept raw bytes so we can parse from DB BYTEA
+    without writing the PDF to disk first."""
+
+    def test_parse_pdf_accepts_bytes(self):
+        pdf_path = SEED_PDF
+        if not pdf_path.exists():
+            self.skipTest("real PDF not present")
+        raw = pdf_path.read_bytes()
+        sections, warnings = parse_pdf(raw)
+        self.assertGreater(len(sections), 50,
+                           "should parse the same sections from bytes as from path")
 
 
 if __name__ == "__main__":

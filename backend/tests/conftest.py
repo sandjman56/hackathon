@@ -1,0 +1,61 @@
+"""Shared pytest fixtures.
+
+Each test function gets a fresh psycopg2 connection wrapped in a
+transaction that ALWAYS rolls back at the end. The application code
+calls ``commit()``, but because the test owns the outer transaction
+via ``BEGIN``, those commits become savepoints relative to the test —
+nothing actually persists. This keeps the test DB clean without
+truncating tables between runs.
+
+Requires DATABASE_URL to point at a *test* database.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import psycopg2
+import pytest
+
+# Make backend/ importable when pytest is run from the repo root.
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND_DIR))
+
+
+def _require_test_db() -> str:
+    url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL / DATABASE_URL not set; skipping DB tests")
+    return url
+
+
+@pytest.fixture
+def db_conn():
+    """Yield a psycopg2 connection that rolls back everything on teardown.
+
+    Repo functions call ``conn.commit()`` after each write. That would
+    persist state across tests, so we monkey-patch ``commit`` to a no-op
+    for the life of the fixture. All work happens inside the single
+    fixture-scoped transaction, and the ``rollback()`` in ``finally``
+    undoes it on teardown — leaving the DB clean for the next test.
+    """
+    url = _require_test_db()
+    conn = psycopg2.connect(url)
+    conn.autocommit = False
+    original_commit = conn.commit
+    conn.commit = lambda: None  # type: ignore[method-assign]
+    try:
+        yield conn
+    finally:
+        conn.commit = original_commit  # type: ignore[method-assign]
+        try:
+            conn.rollback()
+        finally:
+            conn.close()
+
+
+@pytest.fixture
+def stub_embedder():
+    from tests.fixtures.stub_embedder import StubEmbeddingProvider
+    return StubEmbeddingProvider(dim=8)
