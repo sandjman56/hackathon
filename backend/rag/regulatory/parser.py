@@ -310,8 +310,10 @@ def parse_pdf(pdf_source: "str | bytes | Path") -> tuple[list[RawSection], list[
     """
     if isinstance(pdf_source, (bytes, bytearray)):
         doc = pymupdf.open(stream=bytes(pdf_source), filetype="pdf")
+        _source_label = f"<bytes len={len(pdf_source)}>"
     else:
         doc = pymupdf.open(str(pdf_source))
+        _source_label = str(pdf_source)
     warnings: list[str] = []
 
     # Build the full ordered span stream across all pages
@@ -570,7 +572,7 @@ def parse_pdf(pdf_source: "str | bytes | Path") -> tuple[list[RawSection], list[
     logger.info(
         "Parsed %d sections from %s (warnings=%d)",
         len(sections),
-        pdf_path,
+        _source_label,
         len(warnings),
     )
     return sections, warnings
