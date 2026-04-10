@@ -283,12 +283,23 @@ async def upload_regulatory_source(
                                 cid, file.content_type)
         raise HTTPException(status_code=400, detail="file must be application/pdf")
 
-    blob = await file.read()
+    # Stream-read in chunks with a running size cap so a multi-GB upload
+    # can't exhaust disk/memory before the limit check fires.
+    buf = bytearray()
+    _CHUNK = 1 << 20  # 1 MiB
+    while True:
+        piece = await file.read(_CHUNK)
+        if not piece:
+            break
+        buf.extend(piece)
+        if len(buf) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"file too large (>{_MAX_UPLOAD_BYTES} bytes)",
+            )
+    blob = bytes(buf)
     if len(blob) == 0:
         raise HTTPException(status_code=400, detail="empty file")
-    if len(blob) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400,
-                            detail=f"file too large (>{_MAX_UPLOAD_BYTES} bytes)")
     if not blob.startswith(b"%PDF"):
         _sources_logger.warning("[sources:%s] rejected: missing %%PDF magic", cid)
         raise HTTPException(status_code=400, detail="not a valid PDF (missing magic bytes)")

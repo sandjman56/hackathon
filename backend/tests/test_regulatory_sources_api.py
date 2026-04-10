@@ -18,21 +18,16 @@ SEED_PDF = BACKEND_DIR / "NEPA-40CFR1500_1508.pdf"
 
 @pytest.fixture
 def client(stub_embedder, monkeypatch):
-    # Stub the embedding provider so lifespan doesn't need a real API key
-    from llm import provider_factory
-    monkeypatch.setattr(provider_factory, "get_embedding_provider",
-                        lambda: stub_embedder)
-
     class _StubLLM:
         provider_name = "stub-llm"
         def complete(self, *a, **k): return "[]"
         def embed(self, text): return stub_embedder.embed(text)
 
-    monkeypatch.setattr(provider_factory, "get_llm_provider",
-                        lambda: _StubLLM())
+    import main
+    monkeypatch.setattr(main, "get_embedding_provider", lambda: stub_embedder)
+    monkeypatch.setattr(main, "get_llm_provider", lambda: _StubLLM())
 
-    from main import app
-    with TestClient(app) as c:
+    with TestClient(main.app) as c:
         yield c
 
 
