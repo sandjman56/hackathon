@@ -10,18 +10,25 @@ from dotenv import load_dotenv
 
 from pathlib import Path
 
+import hashlib
+import uuid
+from typing import Optional
+
+from fastapi import BackgroundTasks, File, Form, UploadFile
+
 from llm.provider_factory import get_llm_provider, get_embedding_provider
 from pipeline import stream_eia_pipeline, cancel_pipeline
 from db.vector_store import init_db, _get_connection
-from rag.regulatory.parser import parse_pdf
-from rag.regulatory.chunker import chunk_sections
-from rag.regulatory.embedder import detect_embedding_dimension, embed_chunks
-from rag.regulatory.store import (
-    DEFAULT_TABLE,
-    build_metadata,
-    init_regulatory_table,
-    upsert_chunks,
+from db.regulatory_sources import (
+    init_regulatory_sources_table,
+    insert_source,
+    list_sources,
+    get_source_by_id,
+    cascade_delete_chunks,
+    delete_source,
+    is_empty as sources_is_empty,
 )
+from services.regulatory_ingest import ingest_source_sync
 
 load_dotenv()
 
@@ -56,6 +63,44 @@ async def lifespan(app: FastAPI):
     print(f"[LIFESPAN] LLM={llm.provider_name}  Embedding={emb.provider_name}", flush=True, file=sys.stdout)
     app.state.llm_provider = llm
     app.state.embedding_provider = emb
+
+    # Initialize the regulatory sources table on every startup.
+    try:
+        _conn = _get_connection()
+        init_regulatory_sources_table(_conn)
+        _conn.close()
+    except Exception as exc:
+        print(f"[LIFESPAN] regulatory_sources init failed: {exc}",
+              flush=True, file=sys.stdout)
+        raise
+
+    # One-time seed: if there are no sources yet but the bundled
+    # NEPA PDF is on disk, ingest it so the modal isn't empty on
+    # first launch. Idempotent thanks to the sha256 unique constraint.
+    try:
+        _conn = _get_connection()
+        if sources_is_empty(_conn):
+            seed = _BACKEND_DIR / "NEPA-40CFR1500_1508.pdf"
+            if seed.exists():
+                raw = seed.read_bytes()
+                sha = hashlib.sha256(raw).hexdigest()
+                row = insert_source(
+                    _conn, filename=seed.name, sha256=sha,
+                    size_bytes=len(raw), blob=raw, is_current=True,
+                )
+                print(f"[LIFESPAN] seeded {seed.name} as id={row['id']}",
+                      flush=True, file=sys.stdout)
+                # Run ingest in-process; takes 30-90s on Gemini, OK for cold start
+                ingest_source_sync(
+                    _conn, source_id=row["id"],
+                    embedding_provider=app.state.embedding_provider,
+                    correlation_id=f"seed{row['id'][:6]}",
+                )
+        _conn.close()
+    except Exception as exc:
+        print(f"[LIFESPAN] auto-import failed (non-fatal): {exc}",
+              flush=True, file=sys.stdout)
+
     yield
 
 
@@ -171,104 +216,119 @@ def delete_project(project_id: int):
     conn.close()
 
 
-# --- Regulatory sources (PDF discovery + ingestion) ----------------------
+# --- Regulatory sources (DB-backed uploads + ingestion) -------------------
 
 _BACKEND_DIR = Path(__file__).resolve().parent
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+
+_sources_logger = logging.getLogger("eia.rag.regulatory.sources")
+if not any(isinstance(h, logging.StreamHandler) for h in _sources_logger.handlers):
+    _sources_logger.addHandler(_stdout_handler)
+_sources_logger.setLevel(logging.DEBUG)
+_sources_logger.propagate = False
 
 
-def _ingested_counts_by_source_file() -> dict[str, int]:
-    """Return {source_file: chunk_count} from the regulatory_chunks table."""
-    try:
-        conn = _get_connection()
-    except Exception as exc:
-        logger.warning("ingested_counts: DB unavailable: %s", exc)
-        return {}
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT to_regclass('public.{DEFAULT_TABLE}')"
-        )
-        if cur.fetchone()[0] is None:
-            return {}
-        cur.execute(
-            f"""
-            SELECT metadata->>'source_file' AS source_file, COUNT(*)
-            FROM {DEFAULT_TABLE}
-            GROUP BY metadata->>'source_file'
-            """
-        )
-        return {row[0]: int(row[1]) for row in cur.fetchall() if row[0]}
-    finally:
-        conn.close()
+def _new_correlation_id() -> str:
+    return uuid.uuid4().hex[:8]
 
 
 @app.get("/api/regulations/sources")
 def list_regulatory_sources():
-    """List PDFs found in the backend directory and their ingestion status."""
-    pdfs = sorted(_BACKEND_DIR.glob("*.pdf"))
-    counts = _ingested_counts_by_source_file()
-    out = []
-    for p in pdfs:
-        stat = p.stat()
-        out.append({
-            "filename": p.name,
-            "size_bytes": stat.st_size,
-            "ingested_chunks": counts.get(p.name, 0),
-        })
-    return {"sources": out}
-
-
-class IngestRequest(BaseModel):
-    filename: str
-    is_current: bool = False
-
-
-@app.post("/api/regulations/ingest")
-def ingest_regulatory_pdf(req: IngestRequest):
-    """Parse, chunk, embed, and upsert one PDF into regulatory_chunks."""
-    pdf_path = (_BACKEND_DIR / req.filename).resolve()
-    # Confine to backend dir.
-    if _BACKEND_DIR not in pdf_path.parents or not pdf_path.exists():
-        raise HTTPException(status_code=404, detail="PDF not found")
-    if pdf_path.suffix.lower() != ".pdf":
-        raise HTTPException(status_code=400, detail="Not a PDF file")
-
-    logger.info("[ingest] parsing %s", pdf_path.name)
-    sections, parser_warnings = parse_pdf(str(pdf_path))
-    chunks = chunk_sections(sections)
-    logger.info(
-        "[ingest] %s -> %d sections, %d chunks, %d warnings",
-        pdf_path.name, len(sections), len(chunks), len(parser_warnings),
-    )
-
-    provider = app.state.embedding_provider
-    dim = detect_embedding_dimension(provider)
-
-    import asyncio as _asyncio
-    embeddings = _asyncio.run(embed_chunks(chunks, provider, concurrency=4))
-
     conn = _get_connection()
     try:
-        init_regulatory_table(conn, embedding_dim=dim)
-        rows = []
-        for chunk, (breadcrumb, vec) in zip(chunks, embeddings):
-            meta = build_metadata(
-                chunk,
-                breadcrumb,
-                source=pdf_path.stem,
-                source_file=pdf_path.name,
-                source_id="",                # Task 7 will replace this endpoint
-                is_current=req.is_current,
-            )
-            rows.append((chunk, breadcrumb, vec, meta))
-        written = upsert_chunks(conn, rows)
+        return {"sources": list_sources(conn)}
     finally:
         conn.close()
 
-    return {
-        "filename": pdf_path.name,
-        "sections": len(sections),
-        "chunks_written": written,
-        "parser_warnings": len(parser_warnings),
-        "embedding_dim": dim,
-    }
+
+@app.get("/api/regulations/sources/{source_id}")
+def get_regulatory_source(source_id: str):
+    conn = _get_connection()
+    try:
+        row = get_source_by_id(conn, source_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="source not found")
+        return row
+    finally:
+        conn.close()
+
+
+def _run_ingest_background(source_id: str, correlation_id: str):
+    """Background task entrypoint. Opens its own DB connection."""
+    conn = _get_connection()
+    try:
+        ingest_source_sync(
+            conn,
+            source_id=source_id,
+            embedding_provider=app.state.embedding_provider,
+            correlation_id=correlation_id,
+        )
+    finally:
+        conn.close()
+
+
+@app.post("/api/regulations/sources", status_code=202)
+async def upload_regulatory_source(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    is_current: bool = Form(False),
+):
+    cid = _new_correlation_id()
+    _sources_logger.info(
+        "[sources:%s] upload received: filename=%s content_type=%s",
+        cid, file.filename, file.content_type,
+    )
+
+    if file.content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
+        _sources_logger.warning("[sources:%s] rejected: bad content_type=%s",
+                                cid, file.content_type)
+        raise HTTPException(status_code=400, detail="file must be application/pdf")
+
+    blob = await file.read()
+    if len(blob) == 0:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(blob) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400,
+                            detail=f"file too large (>{_MAX_UPLOAD_BYTES} bytes)")
+    if not blob.startswith(b"%PDF"):
+        _sources_logger.warning("[sources:%s] rejected: missing %%PDF magic", cid)
+        raise HTTPException(status_code=400, detail="not a valid PDF (missing magic bytes)")
+
+    sha = hashlib.sha256(blob).hexdigest()
+    _sources_logger.info("[sources:%s] sha256=%s size=%d", cid, sha[:12], len(blob))
+
+    conn = _get_connection()
+    try:
+        row = insert_source(
+            conn,
+            filename=file.filename or "upload.pdf",
+            sha256=sha,
+            size_bytes=len(blob),
+            blob=blob,
+            is_current=is_current,
+        )
+    finally:
+        conn.close()
+
+    # If the row already had ready chunks, skip re-ingestion.
+    if row["status"] != "ready":
+        _sources_logger.info("[sources:%s] queueing background ingest for id=%s",
+                             cid, row["id"])
+        background_tasks.add_task(_run_ingest_background, row["id"], cid)
+    else:
+        _sources_logger.info("[sources:%s] dedup hit, already ready, no ingest", cid)
+
+    return row
+
+
+@app.delete("/api/regulations/sources/{source_id}")
+def delete_regulatory_source(source_id: str):
+    conn = _get_connection()
+    try:
+        if get_source_by_id(conn, source_id) is None:
+            raise HTTPException(status_code=404, detail="source not found")
+        deleted_chunks = cascade_delete_chunks(conn, source_id)
+        delete_source(conn, source_id)
+        return {"deleted_chunks": deleted_chunks}
+    finally:
+        conn.close()
