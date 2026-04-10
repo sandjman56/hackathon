@@ -86,14 +86,14 @@ def init_regulatory_table(
                 ON {table_name} USING GIN (metadata jsonb_path_ops);
             """
         )
-        # IVFFlat index for cosine similarity. The lists value should grow
-        # with the corpus; 100 is fine for ~10k chunks.
+        # HNSW index for cosine similarity. Supports up to 4000 dimensions
+        # (IVFFlat caps at 2000, which breaks gemini-embedding-001 at 3072).
         cur.execute(
             f"""
             CREATE INDEX IF NOT EXISTS {table_name}_embedding_cosine_idx
                 ON {table_name}
-                USING ivfflat (embedding vector_cosine_ops)
-                WITH (lists = 100);
+                USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64);
             """
         )
     conn.commit()
