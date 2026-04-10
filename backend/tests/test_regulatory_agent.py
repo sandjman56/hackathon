@@ -10,6 +10,18 @@ from db.regulatory_sources import init_regulatory_sources_table
 from rag.regulatory.store import init_regulatory_table
 
 
+class _NoCloseConn:
+    """Wrapper that no-ops .close() so the fixture conn survives agent teardown."""
+    def __init__(self, c):
+        self._c = c
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
+
+    def close(self):
+        pass
+
+
 @pytest.fixture
 def initialized(db_conn, stub_embedder):
     init_regulatory_sources_table(db_conn)
@@ -53,7 +65,7 @@ def test_agent_returns_regs_when_corpus_present(initialized, monkeypatch):
 
     # Patch _get_connection so the agent uses our test conn
     from agents import regulatory_screening as agent_mod
-    monkeypatch.setattr(agent_mod, "_get_connection", lambda: conn)
+    monkeypatch.setattr(agent_mod, "_get_connection", lambda: _NoCloseConn(conn))
 
     from agents.regulatory_screening import RegulatoryScreeningAgent
     agent = RegulatoryScreeningAgent(fake_llm, embedder)
@@ -79,7 +91,7 @@ def test_agent_empty_corpus_returns_empty(initialized, monkeypatch):
     fake_llm.provider_name = "fake"
 
     from agents import regulatory_screening as agent_mod
-    monkeypatch.setattr(agent_mod, "_get_connection", lambda: conn)
+    monkeypatch.setattr(agent_mod, "_get_connection", lambda: _NoCloseConn(conn))
 
     from agents.regulatory_screening import RegulatoryScreeningAgent
     agent = RegulatoryScreeningAgent(fake_llm, embedder)
@@ -101,7 +113,7 @@ def test_agent_invalid_llm_json_returns_empty(initialized, monkeypatch):
     fake_llm.complete.return_value = "not valid json at all"
 
     from agents import regulatory_screening as agent_mod
-    monkeypatch.setattr(agent_mod, "_get_connection", lambda: conn)
+    monkeypatch.setattr(agent_mod, "_get_connection", lambda: _NoCloseConn(conn))
 
     from agents.regulatory_screening import RegulatoryScreeningAgent
     agent = RegulatoryScreeningAgent(fake_llm, embedder)

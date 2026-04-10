@@ -3,7 +3,7 @@ import logging
 import sys
 import threading
 import traceback
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
 
@@ -148,7 +148,7 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_provider: Any):
+def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_provider: LLMProvider):
     """Create a LangGraph node function wrapping an agent's .run() call."""
     if agent_key == "regulatory_screening":
         agent = agent_class(llm, embedding_provider)
@@ -181,7 +181,7 @@ def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_pr
     return node_fn
 
 
-def build_pipeline(llm: LLMProvider, embedding_provider: Any):
+def build_pipeline(llm: LLMProvider, embedding_provider: LLMProvider):
     """Construct and compile the EIA LangGraph pipeline."""
     graph = StateGraph(EIAPipelineState)
     for agent_key, agent_class in AGENT_REGISTRY:
@@ -199,7 +199,7 @@ def run_eia_pipeline(
     coordinates: str,
     description: str,
     llm: LLMProvider,
-    embedding_provider: Any,
+    embedding_provider: LLMProvider,
 ) -> dict:
     compiled = build_pipeline(llm, embedding_provider)
     initial_state: EIAPipelineState = {
@@ -232,7 +232,7 @@ def stream_eia_pipeline(
     coordinates: str,
     description: str,
     llm: LLMProvider,
-    embedding_provider: Any,
+    embedding_provider: LLMProvider,
 ):
     """Execute the EIA pipeline as a generator yielding SSE events.
 

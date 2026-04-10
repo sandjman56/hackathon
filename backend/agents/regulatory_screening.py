@@ -3,7 +3,6 @@ import logging
 import re
 import time
 import uuid
-from typing import Any
 
 from db.vector_store import _get_connection
 from llm.base import LLMProvider
@@ -18,7 +17,7 @@ class RegulatoryScreeningAgent:
     """Real RAG: embed project context, cosine-search regulatory_chunks,
     ask the LLM to pick applicable regulations from the retrieved snippets."""
 
-    def __init__(self, llm: LLMProvider, embedding_provider: Any):
+    def __init__(self, llm: LLMProvider, embedding_provider: LLMProvider):
         self.llm = llm
         self.embedding_provider = embedding_provider
 
@@ -29,51 +28,45 @@ class RegulatoryScreeningAgent:
         err = lambda m, *a: logger.error(f"[regulatory:{cid}] " + m, *a)
 
         log("starting")
+        query_text = self._build_query_text(state)
+        log("query_text built: %d chars", len(query_text))
+
+        t0 = time.time()
+        query_vec = self.embedding_provider.embed(query_text)
+        log("embedded query in %.2fs dim=%d",
+            time.time() - t0, len(query_vec))
+
+        conn = _get_connection()
         try:
-            query_text = self._build_query_text(state)
-            log("query_text built: %d chars", len(query_text))
-
-            t0 = time.time()
-            query_vec = self.embedding_provider.embed(query_text)
-            log("embedded query in %.2fs dim=%d",
-                time.time() - t0, len(query_vec))
-
-            conn = _get_connection()
+            hits = search_regulations(
+                conn, query_vec, top_k=_TOP_K,
+                filters={"is_current": True},
+            )
+        finally:
             try:
-                hits = search_regulations(
-                    conn, query_vec, top_k=_TOP_K,
-                    filters={"is_current": True},
-                )
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            log("retrieved %d chunks", len(hits))
+                conn.close()
+            except Exception:
+                pass
+        log("retrieved %d chunks", len(hits))
 
-            if not hits:
-                warn("empty corpus or zero hits — returning []")
-                state["regulations"] = []
-                return state
-
-            sims = [h.get("similarity", 0.0) for h in hits]
-            log("similarity range %.2f-%.2f", min(sims), max(sims))
-
-            prompt = self._build_prompt(state, hits)
-            log("LLM call begin")
-            t0 = time.time()
-            raw = self.llm.complete(prompt)
-            log("LLM returned in %.2fs (%d chars)", time.time() - t0, len(raw or ""))
-
-            regs = self._parse_llm_json(raw)
-            log("parsed %d regulations", len(regs))
-            state["regulations"] = regs
-            return state
-
-        except Exception as exc:
-            err("agent failed: %s", exc, exc_info=True)
+        if not hits:
+            warn("empty corpus or zero hits — returning []")
             state["regulations"] = []
             return state
+
+        sims = [h.get("similarity", 0.0) for h in hits]
+        log("similarity range %.2f-%.2f", min(sims), max(sims))
+
+        prompt = self._build_prompt(state, hits)
+        log("LLM call begin")
+        t0 = time.time()
+        raw = self.llm.complete(prompt)
+        log("LLM returned in %.2fs (%d chars)", time.time() - t0, len(raw or ""))
+
+        regs = self._parse_llm_json(raw)
+        log("parsed %d regulations", len(regs))
+        state["regulations"] = regs
+        return state
 
     # --- helpers --------------------------------------------------------
 
