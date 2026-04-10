@@ -103,8 +103,18 @@ class RegulatoryScreeningAgent:
         excerpts = "\n\n".join(excerpt_lines)
         return f"""You are a NEPA compliance assistant. Based on the project below
 and the excerpts from the Code of Federal Regulations, return a JSON
-array of regulations that apply. Each item:
-  {{ "name": str, "jurisdiction": str, "description": str, "citation": str }}
+array of regulations that apply.
+
+Each item must have exactly these four fields:
+  {{
+    "name": "<short regulation name, e.g. 'NEPA Environmental Assessment', 'Clean Water Act Section 404', 'Endangered Species Act Section 7'>",
+    "jurisdiction": "<level of government: 'Federal', 'State', or 'Local'>",
+    "description": "<1-2 sentences explaining why this regulation applies to this specific project>",
+    "citation": "<formal CFR citation, e.g. '40 CFR §1501.3', '33 CFR §328.3'>"
+  }}
+
+Do NOT copy breadcrumb paths, chunk headers, or [DEFINITION] tags into any field.
+Use clean, human-readable names and concise descriptions.
 
 Project:
   type: {parsed.get('type', 'unknown')}
