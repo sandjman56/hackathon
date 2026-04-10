@@ -3,6 +3,7 @@ import ProjectForm from './components/ProjectForm.jsx'
 import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
 import BrainScanner from './components/BrainScanner.jsx'
+import DatabaseView from './components/DatabaseView.jsx'
 
 const AGENTS = [
   'project_parser',
@@ -20,6 +21,7 @@ function App() {
   const [results, setResults]   = useState(null)
   const [logs, setLogs]         = useState([])
   const [running, setRunning]   = useState(false)
+  const [view, setView]         = useState('main')
 
   const handleResult = (data) => {
     setResults(data)
@@ -69,47 +71,56 @@ function App() {
           <span style={styles.version}>v0.1.0</span>
         </div>
         <div style={styles.headerRight}>
+          <button
+            style={styles.dbBtn}
+            onClick={() => setView(view === 'db' ? 'main' : 'db')}
+          >
+            VIEW DB
+          </button>
           <span style={styles.providerBadge}>Gemini</span>
           <span style={styles.statusChip}>SYSTEM ONLINE</span>
         </div>
       </header>
 
-      {/* Main — 3 columns */}
-      <div style={styles.main}>
-        {/* Left: project form */}
-        <div style={styles.colLeft}>
-          <ProjectForm
-            onResult={handleResult}
-            onPipelineUpdate={handlePipelineUpdate}
-            onStepsUpdate={handleStepsUpdate}
-            onLog={handleLog}
-            onRunningChange={handleRunningChange}
-          />
-        </div>
-
-        <div style={styles.separator} />
-
-        {/* Middle: pipeline status + results */}
-        <div style={styles.colMiddle}>
-          <div style={styles.colMiddleTop}>
-            <AgentPipeline pipelineState={pipelineState} agentOutputs={agentOutputs} />
+      {view === 'db' ? (
+        <DatabaseView onBack={() => setView('main')} />
+      ) : (
+        <div style={styles.main}>
+          {/* Left: project form */}
+          <div style={styles.colLeft}>
+            <ProjectForm
+              onResult={handleResult}
+              onPipelineUpdate={handlePipelineUpdate}
+              onStepsUpdate={handleStepsUpdate}
+              onLog={handleLog}
+              onRunningChange={handleRunningChange}
+            />
           </div>
-          <div style={styles.colMiddleBottom}>
-            <ResultsPanel results={results} />
+
+          <div style={styles.separator} />
+
+          {/* Middle: pipeline status + results */}
+          <div style={styles.colMiddle}>
+            <div style={styles.colMiddleTop}>
+              <AgentPipeline pipelineState={pipelineState} agentOutputs={agentOutputs} />
+            </div>
+            <div style={styles.colMiddleBottom}>
+              <ResultsPanel results={results} />
+            </div>
+          </div>
+
+          <div style={styles.separator} />
+
+          {/* Right: brain scanner */}
+          <div style={styles.colRight}>
+            <BrainScanner
+              logs={logs}
+              running={running}
+              onCommand={handleCommand}
+            />
           </div>
         </div>
-
-        <div style={styles.separator} />
-
-        {/* Right: brain scanner */}
-        <div style={styles.colRight}>
-          <BrainScanner
-            logs={logs}
-            running={running}
-            onCommand={handleCommand}
-          />
-        </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -170,6 +181,17 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
+  },
+  dbBtn: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    letterSpacing: '1px',
+    color: 'var(--green-primary)',
+    background: 'transparent',
+    border: '1px solid var(--green-primary)',
+    borderRadius: '4px',
+    padding: '4px 10px',
+    cursor: 'pointer',
   },
   providerBadge: {
     fontFamily: 'var(--font-mono)',
