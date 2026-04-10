@@ -26,9 +26,10 @@ from db.regulatory_sources import (
     get_source_by_id,
     cascade_delete_chunks,
     delete_source,
-    is_empty as sources_is_empty,
 )
 from services.regulatory_ingest import ingest_source_sync
+from rag.regulatory.store import init_regulatory_table
+from rag.regulatory.embedder import detect_embedding_dimension
 
 load_dotenv()
 
@@ -73,31 +74,18 @@ async def lifespan(app: FastAPI):
     app.state.llm_provider = llm
     app.state.embedding_provider = emb
 
-    # One-time seed: if there are no sources yet but the bundled
-    # NEPA PDF is on disk, ingest it so the modal isn't empty on
-    # first launch. Idempotent thanks to the sha256 unique constraint.
+    # Ensure the regulatory_chunks table exists on every startup.
+    # Without this, the table only gets created during PDF ingestion,
+    # so a failed/skipped ingest leaves the screening agent broken.
     try:
         _conn = _get_connection()
-        if sources_is_empty(_conn):
-            seed = _BACKEND_DIR / "NEPA-40CFR1500_1508.pdf"
-            if seed.exists():
-                raw = seed.read_bytes()
-                sha = hashlib.sha256(raw).hexdigest()
-                row = insert_source(
-                    _conn, filename=seed.name, sha256=sha,
-                    size_bytes=len(raw), blob=raw, is_current=True,
-                )
-                print(f"[LIFESPAN] seeded {seed.name} as id={row['id']}",
-                      flush=True, file=sys.stdout)
-                # Run ingest in-process; takes 30-90s on Gemini, OK for cold start
-                ingest_source_sync(
-                    _conn, source_id=row["id"],
-                    embedding_provider=app.state.embedding_provider,
-                    correlation_id=f"seed{row['id'][:6]}",
-                )
+        dim = detect_embedding_dimension(emb)
+        init_regulatory_table(_conn, embedding_dim=dim)
         _conn.close()
+        print(f"[LIFESPAN] regulatory_chunks table ready (dim={dim})",
+              flush=True, file=sys.stdout)
     except Exception as exc:
-        print(f"[LIFESPAN] auto-import failed (non-fatal): {exc}",
+        print(f"[LIFESPAN] regulatory_chunks init failed: {exc}",
               flush=True, file=sys.stdout)
 
     yield
