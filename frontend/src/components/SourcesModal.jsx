@@ -110,7 +110,7 @@ export default function SourcesModal({ onClose }) {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      fd.append('is_current', 'false')
+      fd.append('is_current', 'true')
       const res = await fetch(`${apiBase}/api/regulations/sources`, {
         method: 'POST',
         body: fd,
