@@ -53,6 +53,15 @@ async def lifespan(app: FastAPI):
     print("[LIFESPAN] Initialising LLM providers…", flush=True, file=sys.stdout)
     try:
         init_db()
+        # Initialize the regulatory sources table on every startup.
+        try:
+            _conn = _get_connection()
+            init_regulatory_sources_table(_conn)
+            _conn.close()
+        except Exception as exc:
+            print(f"[LIFESPAN] regulatory_sources init failed: {exc}",
+                  flush=True, file=sys.stdout)
+            raise
         llm = get_llm_provider()
         emb = get_embedding_provider()
     except Exception as exc:
@@ -63,16 +72,6 @@ async def lifespan(app: FastAPI):
     print(f"[LIFESPAN] LLM={llm.provider_name}  Embedding={emb.provider_name}", flush=True, file=sys.stdout)
     app.state.llm_provider = llm
     app.state.embedding_provider = emb
-
-    # Initialize the regulatory sources table on every startup.
-    try:
-        _conn = _get_connection()
-        init_regulatory_sources_table(_conn)
-        _conn.close()
-    except Exception as exc:
-        print(f"[LIFESPAN] regulatory_sources init failed: {exc}",
-              flush=True, file=sys.stdout)
-        raise
 
     # One-time seed: if there are no sources yet but the bundled
     # NEPA PDF is on disk, ingest it so the modal isn't empty on
