@@ -13,10 +13,14 @@ class GeminiProvider(LLMProvider):
         if not api_key:
             raise ValueError("GOOGLE_API_KEY environment variable is not set.")
         model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-        embedding_model = os.environ.get("GEMINI_EMBEDDING_MODEL", "models/text-embedding-004")
+        embedding_model = os.environ.get("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001")
 
         self._llm = ChatGoogleGenerativeAI(model=model, google_api_key=api_key)
-        self._embeddings = GoogleGenerativeAIEmbeddings(model=embedding_model, google_api_key=api_key)
+        self._embeddings = GoogleGenerativeAIEmbeddings(
+            model=embedding_model,
+            google_api_key=api_key,
+            output_dimensionality=1536,
+        )
 
     @property
     def provider_name(self) -> str:
