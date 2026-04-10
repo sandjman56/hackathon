@@ -30,25 +30,37 @@ def _require_test_db() -> str:
     return url
 
 
+class _NoCommitConnection:
+    """Thin wrapper around a psycopg2 connection that turns commit() into a
+    no-op. psycopg2 C-extension connections don't allow monkey-patching
+    ``commit``, so we delegate everything except commit.
+    """
+    def __init__(self, real_conn):
+        self._conn = real_conn
+
+    def commit(self):
+        pass  # swallow — the fixture rollback undoes everything
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 @pytest.fixture
 def db_conn():
     """Yield a psycopg2 connection that rolls back everything on teardown.
 
     Repo functions call ``conn.commit()`` after each write. That would
-    persist state across tests, so we monkey-patch ``commit`` to a no-op
-    for the life of the fixture. All work happens inside the single
-    fixture-scoped transaction, and the ``rollback()`` in ``finally``
-    undoes it on teardown — leaving the DB clean for the next test.
+    persist state across tests, so we wrap the connection to make
+    ``commit`` a no-op. All work happens inside a single transaction,
+    and the ``rollback()`` in ``finally`` undoes it on teardown.
     """
     url = _require_test_db()
     conn = psycopg2.connect(url)
     conn.autocommit = False
-    original_commit = conn.commit
-    conn.commit = lambda: None  # type: ignore[method-assign]
+    wrapper = _NoCommitConnection(conn)
     try:
-        yield conn
+        yield wrapper
     finally:
-        conn.commit = original_commit  # type: ignore[method-assign]
         try:
             conn.rollback()
         finally:
