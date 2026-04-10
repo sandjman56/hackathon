@@ -25,7 +25,6 @@ class RegulatoryScreeningAgent:
         cid = uuid.uuid4().hex[:8]
         log = lambda m, *a: logger.info(f"[regulatory:{cid}] " + m, *a)
         warn = lambda m, *a: logger.warning(f"[regulatory:{cid}] " + m, *a)
-        err = lambda m, *a: logger.error(f"[regulatory:{cid}] " + m, *a)
 
         log("starting")
         query_text = self._build_query_text(state)
