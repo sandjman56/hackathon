@@ -84,6 +84,14 @@ def ingest_source_sync(
         chunks = chunk_sections(sections)
         log("chunking done: %d chunks in %.2fs", len(chunks), time.time() - t0)
 
+        if not chunks:
+            warn("sections produced zero chunks — marking failed")
+            update_status(
+                conn, source_id, status="failed",
+                status_message="Chunker produced zero chunks from a non-empty section list.",
+            )
+            return
+
         dim = detect_embedding_dimension(embedding_provider)
         log("embedding dim=%d  chunks_total=%d", dim, len(chunks))
         update_status(
@@ -149,6 +157,10 @@ def ingest_source_sync(
 
     except Exception as exc:
         err("ingest failed: %s", exc, exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:
+            err("rollback before failure write also raised", exc_info=True)
         try:
             update_status(
                 conn, source_id, status="failed",
