@@ -257,6 +257,7 @@ def ingest_regulatory_pdf(req: IngestRequest):
                 breadcrumb,
                 source=pdf_path.stem,
                 source_file=pdf_path.name,
+                source_id="",                # Task 7 will replace this endpoint
                 is_current=req.is_current,
             )
             rows.append((chunk, breadcrumb, vec, meta))

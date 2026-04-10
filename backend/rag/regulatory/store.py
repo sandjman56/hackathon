@@ -108,6 +108,7 @@ def build_metadata(
     *,
     source: str,
     source_file: str,
+    source_id: str,
     is_current: bool,
 ) -> dict:
     """Assemble the per-chunk metadata dict that gets stored as JSONB.
@@ -117,6 +118,8 @@ def build_metadata(
         breadcrumb: The breadcrumb string already built for this chunk.
         source: Document identifier (e.g. ``"40_CFR_1500-1508"``).
         source_file: Original PDF filename.
+        source_id: Foreign key into the regulatory_sources table; lets
+            cascade-delete remove all chunks belonging to a source.
         is_current: Whether this corpus is the current authoritative
             version of the regulation. The 2005 reprint is *not* — flag
             it ``False`` so retrieval surfaces the warning to the LLM.
@@ -139,6 +142,7 @@ def build_metadata(
     return {
         "source": source,
         "source_file": source_file,
+        "source_id": source_id,
         "citation": primary.citation,
         "all_citations": citations,
         "title": primary.title,
