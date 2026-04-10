@@ -143,6 +143,7 @@ def run_pipeline(req: RunRequest):
             coordinates=req.coordinates,
             description=req.description,
             llm=app.state.llm_provider,
+            embedding_provider=app.state.embedding_provider,
         ),
         media_type="text/event-stream",
         headers={
