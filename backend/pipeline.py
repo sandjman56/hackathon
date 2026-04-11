@@ -148,10 +148,10 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_provider: LLMProvider):
+def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_provider: LLMProvider, screening_llm: LLMProvider | None = None):
     """Create a LangGraph node function wrapping an agent's .run() call."""
     if agent_key == "regulatory_screening":
-        agent = agent_class(llm, embedding_provider)
+        agent = agent_class(screening_llm or llm, embedding_provider)
     else:
         agent = agent_class(llm)
 
@@ -181,11 +181,11 @@ def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_pr
     return node_fn
 
 
-def build_pipeline(llm: LLMProvider, embedding_provider: LLMProvider):
+def build_pipeline(llm: LLMProvider, embedding_provider: LLMProvider, screening_llm: LLMProvider | None = None):
     """Construct and compile the EIA LangGraph pipeline."""
     graph = StateGraph(EIAPipelineState)
     for agent_key, agent_class in AGENT_REGISTRY:
-        graph.add_node(agent_key, _make_agent_node(agent_key, agent_class, llm, embedding_provider))
+        graph.add_node(agent_key, _make_agent_node(agent_key, agent_class, llm, embedding_provider, screening_llm))
     prev = START
     for agent_key, _ in AGENT_REGISTRY:
         graph.add_edge(prev, agent_key)
@@ -200,8 +200,9 @@ def run_eia_pipeline(
     description: str,
     llm: LLMProvider,
     embedding_provider: LLMProvider,
+    screening_llm: LLMProvider | None = None,
 ) -> dict:
-    compiled = build_pipeline(llm, embedding_provider)
+    compiled = build_pipeline(llm, embedding_provider, screening_llm)
     initial_state: EIAPipelineState = {
         "project_name": project_name,
         "coordinates": coordinates,
@@ -233,6 +234,7 @@ def stream_eia_pipeline(
     description: str,
     llm: LLMProvider,
     embedding_provider: LLMProvider,
+    screening_llm: LLMProvider | None = None,
 ):
     """Execute the EIA pipeline as a generator yielding SSE events.
 
@@ -304,7 +306,7 @@ def stream_eia_pipeline(
                 return
 
             if agent_key == "regulatory_screening":
-                agent = agent_class(llm, embedding_provider)
+                agent = agent_class(screening_llm or llm, embedding_provider)
             else:
                 agent = agent_class(llm)
             steps = AGENT_STEPS.get(agent_key, [])

@@ -70,7 +70,7 @@ def test_agent_returns_regs_when_corpus_present(initialized, monkeypatch):
     from agents.regulatory_screening import RegulatoryScreeningAgent
     agent = RegulatoryScreeningAgent(fake_llm, embedder)
     state = {
-        "parsed_project": {"type": "highway widening", "scale": "5 mi"},
+        "parsed_project": {"project_type": "highway widening", "scale": "5 mi"},
         "coordinates": "40.0,-79.0",
         "environmental_data": {
             "fema_flood_zones": {"in_sfha": True},

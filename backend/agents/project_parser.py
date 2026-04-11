@@ -21,10 +21,9 @@ Extract the following fields and return them as a JSON object:
 - project_type  (string): the category of project, e.g. "solar farm", "highway expansion", "warehouse", "pipeline", etc.
 - scale         (string): size or scope, e.g. "5 MW", "12 miles", "200,000 sq ft", "unknown"
 - location      (string): human-readable place name inferred from the description or coordinates
-- permits_required (array of strings): likely federal/state permits needed, e.g. ["Section 404 (CWA)", "Section 7 (ESA)", "NEPA EA"]
 
 Return exactly this structure:
-{{"project_type": "...", "scale": "...", "location": "...", "permits_required": [...]}}
+{{"project_type": "...", "scale": "...", "location": "..."}}
 """
 
 
@@ -62,7 +61,6 @@ class ProjectParserAgent:
                 "project_type": str(parsed.get("project_type", "unknown")),
                 "scale":        str(parsed.get("scale", "unknown")),
                 "location":     str(parsed.get("location", coordinates or "unknown")),
-                "permits_required": list(parsed.get("permits_required", [])),
             }
             logger.info("[ProjectParser] Parsed: %s", result)
 
@@ -72,7 +70,6 @@ class ProjectParserAgent:
                 "project_type": "unknown",
                 "scale": "unknown",
                 "location": coordinates or "unknown",
-                "permits_required": [],
             }
 
         state["parsed_project"] = result
