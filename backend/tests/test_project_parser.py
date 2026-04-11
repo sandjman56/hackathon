@@ -33,7 +33,6 @@ VALID_RESPONSE = json.dumps({
     "project_type": "solar farm",
     "scale": "50 MW",
     "location": "Pittsburgh, PA",
-    "permits_required": ["Section 404 (CWA)", "Section 7 (ESA)", "NEPA EA"],
 })
 
 
@@ -53,11 +52,6 @@ class TestProjectParserHappyPath(unittest.TestCase):
 
     def test_location(self):
         self.assertEqual(self.result["parsed_project"]["location"], "Pittsburgh, PA")
-
-    def test_permits_list(self):
-        permits = self.result["parsed_project"]["permits_required"]
-        self.assertIsInstance(permits, list)
-        self.assertIn("Section 404 (CWA)", permits)
 
     def test_original_state_keys_preserved(self):
         for key in BASE_STATE:
@@ -95,7 +89,6 @@ class TestProjectParserFallback(unittest.TestCase):
         pp = result["parsed_project"]
         self.assertEqual(pp["project_type"], "unknown")
         self.assertEqual(pp["scale"], "unknown")
-        self.assertEqual(pp["permits_required"], [])
 
     def test_empty_response_uses_fallback(self):
         result = self._run_with("")
@@ -112,33 +105,18 @@ class TestProjectParserFallback(unittest.TestCase):
         pp = result["parsed_project"]
         self.assertEqual(pp["project_type"], "pipeline")
         self.assertEqual(pp["scale"], "unknown")          # default
-        self.assertIsInstance(pp["permits_required"], list)
 
 
 class TestProjectParserOutputTypes(unittest.TestCase):
     """Ensure output types are always correct regardless of LLM weirdness."""
 
-    def test_permits_always_list_even_if_llm_returns_string(self):
-        bad = json.dumps({
-            "project_type": "highway",
-            "scale": "12 miles",
-            "location": "somewhere",
-            "permits_required": "Section 404",  # string instead of list
-        })
-        agent = ProjectParserAgent(make_llm(bad))
-        result = agent.run(dict(BASE_STATE))
-        # list() on a string iterates chars — that's acceptable behaviour,
-        # but the important thing is it doesn't crash and returns a list.
-        self.assertIsInstance(result["parsed_project"]["permits_required"], list)
-
-    def test_all_fields_are_strings_except_permits(self):
+    def test_all_fields_are_strings(self):
         agent = ProjectParserAgent(make_llm(VALID_RESPONSE))
         result = agent.run(dict(BASE_STATE))
         pp = result["parsed_project"]
         self.assertIsInstance(pp["project_type"], str)
         self.assertIsInstance(pp["scale"], str)
         self.assertIsInstance(pp["location"], str)
-        self.assertIsInstance(pp["permits_required"], list)
 
 
 if __name__ == "__main__":

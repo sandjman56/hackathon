@@ -67,20 +67,11 @@ function Empty({ msg = 'No data' }) {
 
 function renderProjectParser(data) {
   if (!data) return <Empty />
-  const permits = data.permits_required || []
   return (
     <div style={s.outputBody}>
       <DataRow label="Type" value={data.project_type} />
       <DataRow label="Scale" value={data.scale} />
       <DataRow label="Location" value={data.location} />
-      <div style={s.dataRow}>
-        <span style={s.dataLabel}>Permits Required</span>
-        <div>
-          {permits.length === 0
-            ? <span style={s.dataValue}>None identified</span>
-            : permits.map((p, i) => <div key={i} style={s.bullet}>• {p}</div>)}
-        </div>
-      </div>
     </div>
   )
 }

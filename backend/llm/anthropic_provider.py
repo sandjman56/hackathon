@@ -9,10 +9,10 @@ class AnthropicProvider(LLMProvider):
     """LLM provider backed by the Anthropic Python SDK."""
 
     def __init__(self):
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        api_key = os.environ.get("CLAUDE_KEY")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable is not set.")
-        self._model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+            raise ValueError("CLAUDE_KEY environment variable is not set.")
+        self._model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
         self._client = anthropic.Anthropic(api_key=api_key)
 
     @property

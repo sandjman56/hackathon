@@ -12,6 +12,34 @@ logger = logging.getLogger("eia.agents.regulatory_screening")
 
 _TOP_K = 8
 
+_SYSTEM = """\
+You are a NEPA regulatory compliance assistant. Your job is to identify \
+specific permits, approvals, and consultations that a project must obtain \
+based on its characteristics and the regulatory excerpts provided.
+
+You MUST respond with ONLY a valid JSON array. No markdown, no explanation, \
+no code fences — just the raw JSON array.
+
+Each item in the array must have exactly these four fields:
+{
+  "name": "<permit or approval name, e.g. 'Clean Water Act Section 404 Permit', 'ESA Section 7 Consultation'>",
+  "jurisdiction": "<'Federal', 'State', or 'Local'>",
+  "description": "<1-2 sentences: why this specific project triggers this requirement>",
+  "citation": "<formal citation, e.g. '33 CFR §328.3', '50 CFR §402'>"
+}
+
+Rules:
+- List PERMITS and APPROVALS the project must obtain, not NEPA process steps.
+- Do NOT list "Environmental Assessment", "Finding of No Significant Impact", \
+"Record of Decision", "Major Federal Action", or "Limitations on Actions During \
+NEPA Process" as separate regulations — these are steps within NEPA review, not \
+independent permits.
+- You MAY list "NEPA Environmental Impact Statement" or "NEPA Environmental \
+Assessment" as a single entry if the project triggers NEPA review, but only once.
+- Do NOT copy breadcrumb paths, chunk headers, or [DEFINITION] tags into any field.
+- Do NOT invent citations. Only cite regulations referenced in the provided excerpts.\
+"""
+
 
 class RegulatoryScreeningAgent:
     """Real RAG: embed project context, cosine-search regulatory_chunks,
@@ -59,7 +87,7 @@ class RegulatoryScreeningAgent:
         prompt = self._build_prompt(state, hits)
         log("LLM call begin")
         t0 = time.time()
-        raw = self.llm.complete(prompt)
+        raw = self.llm.complete(prompt, system=_SYSTEM)
         log("LLM returned in %.2fs (%d chars)", time.time() - t0, len(raw or ""))
 
         regs = self._parse_llm_json(raw)
@@ -78,7 +106,7 @@ class RegulatoryScreeningAgent:
         farmland = env.get("usda_farmland") or {}
 
         parts = [
-            f"Project type: {parsed.get('type', 'unknown')}",
+            f"Project type: {parsed.get('project_type', 'unknown')}",
             f"Scale: {parsed.get('scale', 'unknown')}",
             f"Coordinates: {state.get('coordinates', 'unknown')}",
             f"In SFHA: {fema.get('in_sfha', False)}",
@@ -95,29 +123,14 @@ class RegulatoryScreeningAgent:
         for i, h in enumerate(hits, 1):
             meta = h.get("metadata") or {}
             excerpt_lines.append(
-                f"[{i}] {h.get('breadcrumb', '')}  "
-                f"(cite: {meta.get('citation', '?')}, "
+                f"[{i}] (cite: {meta.get('citation', '?')}, "
                 f"sim: {h.get('similarity', 0):.2f})\n"
                 f"    {h.get('content', '').strip()}"
             )
         excerpts = "\n\n".join(excerpt_lines)
-        return f"""You are a NEPA compliance assistant. Based on the project below
-and the excerpts from the Code of Federal Regulations, return a JSON
-array of regulations that apply.
-
-Each item must have exactly these four fields:
-  {{
-    "name": "<short regulation name, e.g. 'NEPA Environmental Assessment', 'Clean Water Act Section 404', 'Endangered Species Act Section 7'>",
-    "jurisdiction": "<level of government: 'Federal', 'State', or 'Local'>",
-    "description": "<1-2 sentences explaining why this regulation applies to this specific project>",
-    "citation": "<formal CFR citation, e.g. '40 CFR §1501.3', '33 CFR §328.3'>"
-  }}
-
-Do NOT copy breadcrumb paths, chunk headers, or [DEFINITION] tags into any field.
-Use clean, human-readable names and concise descriptions.
-
+        return f"""\
 Project:
-  type: {parsed.get('type', 'unknown')}
+  type: {parsed.get('project_type', 'unknown')}
   scale: {parsed.get('scale', 'unknown')}
   coordinates: {state.get('coordinates', 'unknown')}
   flags: in_sfha={env.get('fema_flood_zones', {}).get('in_sfha', False)}, \
@@ -125,11 +138,10 @@ species_count={env.get('usfws_species', {}).get('count', 0)}, \
 wetlands={env.get('nwi_wetlands', {}).get('count', 0)}, \
 prime_farmland={env.get('usda_farmland', {}).get('is_prime', False)}
 
-Excerpts (top {len(hits)} by similarity):
+Regulatory excerpts (top {len(hits)} by relevance):
 {excerpts}
 
-Return only valid JSON. Do not invent citations.
-"""
+Identify the permits, approvals, and consultations this project requires. Return JSON only."""
 
     def _parse_llm_json(self, raw: str) -> list[dict]:
         if not raw:

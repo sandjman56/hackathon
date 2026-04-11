@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 
@@ -71,8 +72,17 @@ async def lifespan(app: FastAPI):
     logger.info("LLM provider: %s", llm.provider_name)
     logger.info("Embedding provider: %s", emb.provider_name)
     print(f"[LIFESPAN] LLM={llm.provider_name}  Embedding={emb.provider_name}", flush=True, file=sys.stdout)
+
+    # Dedicated Anthropic provider for regulatory screening (optional)
+    screening_llm = None
+    if os.environ.get("CLAUDE_KEY"):
+        from llm.anthropic_provider import AnthropicProvider
+        screening_llm = AnthropicProvider()
+        logger.info("Regulatory screening LLM: %s (%s)", screening_llm.provider_name, "haiku")
+
     app.state.llm_provider = llm
     app.state.embedding_provider = emb
+    app.state.screening_llm = screening_llm
 
     # Ensure the regulatory_chunks table exists on every startup.
     # Without this, the table only gets created during PDF ingestion,
@@ -132,6 +142,7 @@ def run_pipeline(req: RunRequest):
             description=req.description,
             llm=app.state.llm_provider,
             embedding_provider=app.state.embedding_provider,
+            screening_llm=app.state.screening_llm,
         ),
         media_type="text/event-stream",
         headers={
