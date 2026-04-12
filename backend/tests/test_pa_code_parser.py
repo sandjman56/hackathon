@@ -278,5 +278,40 @@ class TestRealPdfSmoke(unittest.TestCase):
             )
 
 
+# --- breadcrumbs ----------------------------------------------------------
+
+from rag.regulatory.breadcrumbs import build_breadcrumb  # noqa: E402
+from rag.regulatory.chunker import Chunk  # noqa: E402
+
+
+class TestStateCodeBreadcrumbs(unittest.TestCase):
+
+    def _make_pa_raw(self, section="105.14", title="Review of applications",
+                     part="A", part_title="General Provisions"):
+        return RawSection(
+            document_type=DocumentType.STATE_CODE,
+            section=section, title=title,
+            body="test body", citation=f"25 Pa. Code § {section}",
+            pages=[1], part=part, part_title=part_title,
+        )
+
+    def test_basic_breadcrumb(self):
+        raw = self._make_pa_raw()
+        chunk = Chunk(sources=[raw], body="test", token_count=10)
+        bc = build_breadcrumb(chunk)
+        self.assertIn("Title 25", bc)
+        self.assertIn("Chapter 105", bc)
+        self.assertIn("Subchapter A", bc)
+        self.assertIn("§ 105.14", bc)
+        self.assertIn("Review of applications", bc)
+
+    def test_definition_breadcrumb(self):
+        raw = self._make_pa_raw(section="105.1", title="Definitions")
+        chunk = Chunk(sources=[raw], body="Wetlands—areas...",
+                      token_count=10, is_definition=True)
+        bc = build_breadcrumb(chunk)
+        self.assertIn("[DEFINITION]", bc)
+
+
 if __name__ == "__main__":
     unittest.main()
