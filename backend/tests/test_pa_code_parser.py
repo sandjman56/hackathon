@@ -278,6 +278,26 @@ class TestRealPdfSmoke(unittest.TestCase):
             )
 
 
+# --- chunker --------------------------------------------------------------
+
+from rag.regulatory.chunker import Chunk, chunk_section  # noqa: E402
+
+
+class TestPaCodeChunking(unittest.TestCase):
+
+    def test_pa_definition_treated_as_definition(self):
+        raw = RawSection(
+            document_type=DocumentType.STATE_CODE,
+            section="105.1", title="Definitions",
+            body="Wetlands\u2014Areas that are inundated by surface water.",
+            citation="25 Pa. Code \u00a7 105.1",
+            pages=[5], part="A", part_title="General Provisions",
+        )
+        chunks = chunk_section(raw)
+        self.assertEqual(len(chunks), 1)
+        self.assertTrue(chunks[0].is_definition)
+
+
 # --- xref -----------------------------------------------------------------
 
 from rag.regulatory.xref import extract_cross_references  # noqa: E402

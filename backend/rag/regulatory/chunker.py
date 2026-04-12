@@ -79,7 +79,11 @@ _TABLE_HINT_RE = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 
 
 def _is_definition_section(raw: RawSection) -> bool:
-    return raw.document_type == DocumentType.CFR_REGULATION and raw.part == "1508"
+    if raw.document_type == DocumentType.CFR_REGULATION and raw.part == "1508":
+        return True
+    if raw.document_type == DocumentType.STATE_CODE and raw.section.endswith(".1"):
+        return True
+    return False
 
 
 def _split_into_paragraphs(body: str) -> list[tuple[str, str]]:
