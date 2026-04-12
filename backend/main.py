@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from pathlib import Path
@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastapi import BackgroundTasks, File, Form, UploadFile
 
-from llm.provider_factory import get_llm_provider, get_embedding_provider
+from llm.provider_factory import get_embedding_provider
 from pipeline import stream_eia_pipeline, cancel_pipeline
 from db.vector_store import init_db, _get_connection
 from db.regulatory_sources import (
@@ -52,10 +52,9 @@ logger = logging.getLogger("eia")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[LIFESPAN] Initialising LLM providers…", flush=True, file=sys.stdout)
+    print("[LIFESPAN] Initialising embedding provider\u2026", flush=True, file=sys.stdout)
     try:
         init_db()
-        # Initialize the regulatory sources table on every startup.
         try:
             _conn = _get_connection()
             init_regulatory_sources_table(_conn)
@@ -64,29 +63,16 @@ async def lifespan(app: FastAPI):
             print(f"[LIFESPAN] regulatory_sources init failed: {exc}",
                   flush=True, file=sys.stdout)
             raise
-        llm = get_llm_provider()
         emb = get_embedding_provider()
     except Exception as exc:
-        print(f"[LIFESPAN] PROVIDER INIT FAILED: {exc}", flush=True, file=sys.stdout)
+        print(f"[LIFESPAN] INIT FAILED: {exc}", flush=True, file=sys.stdout)
         raise
-    logger.info("LLM provider: %s", llm.provider_name)
     logger.info("Embedding provider: %s", emb.provider_name)
-    print(f"[LIFESPAN] LLM={llm.provider_name}  Embedding={emb.provider_name}", flush=True, file=sys.stdout)
+    print(f"[LIFESPAN] Embedding={emb.provider_name}", flush=True, file=sys.stdout)
 
-    # Dedicated Anthropic provider for regulatory screening (optional)
-    screening_llm = None
-    if os.environ.get("CLAUDE_KEY"):
-        from llm.anthropic_provider import AnthropicProvider
-        screening_llm = AnthropicProvider()
-        logger.info("Regulatory screening LLM: %s (%s)", screening_llm.provider_name, "haiku")
-
-    app.state.llm_provider = llm
     app.state.embedding_provider = emb
-    app.state.screening_llm = screening_llm
 
     # Ensure the regulatory_chunks table exists on every startup.
-    # Without this, the table only gets created during PDF ingestion,
-    # so a failed/skipped ingest leaves the screening agent broken.
     try:
         _conn = _get_connection()
         dim = detect_embedding_dimension(emb)
@@ -116,6 +102,7 @@ class RunRequest(BaseModel):
     project_name: str
     coordinates: str
     description: str
+    models: dict[str, str] = Field(default_factory=dict)
 
 
 @app.post("/api/cancel")
@@ -128,8 +115,23 @@ def cancel_run():
 def health():
     return {
         "status": "ok",
-        "llm_provider": app.state.llm_provider.provider_name,
         "embedding_provider": app.state.embedding_provider.provider_name,
+    }
+
+
+@app.get("/api/providers")
+def get_providers():
+    from llm.pricing import MODEL_PRICING, LAST_UPDATED, SOURCES
+    from llm.provider_factory import available_providers
+    return {
+        "available": available_providers(),
+        "models": [
+            {"id": mid, "label": info["label"], "provider": info["provider"],
+             "input": info["input"], "output": info["output"]}
+            for mid, info in MODEL_PRICING.items()
+        ],
+        "pricing_last_updated": LAST_UPDATED,
+        "pricing_sources": SOURCES,
     }
 
 
@@ -140,9 +142,8 @@ def run_pipeline(req: RunRequest):
             project_name=req.project_name,
             coordinates=req.coordinates,
             description=req.description,
-            llm=app.state.llm_provider,
+            models=req.models,
             embedding_provider=app.state.embedding_provider,
-            screening_llm=app.state.screening_llm,
         ),
         media_type="text/event-stream",
         headers={
