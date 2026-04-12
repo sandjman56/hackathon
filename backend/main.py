@@ -77,6 +77,26 @@ async def lifespan(app: FastAPI):
         _conn = _get_connection()
         dim = detect_embedding_dimension(emb)
         init_regulatory_table(_conn, embedding_dim=dim)
+
+        # One-time backfill: flip is_current to true for sources/chunks
+        # that were ingested before the default was changed.
+        with _conn.cursor() as cur:
+            cur.execute(
+                "UPDATE regulatory_sources SET is_current = true "
+                "WHERE is_current = false"
+            )
+            src_count = cur.rowcount
+            cur.execute(
+                "UPDATE regulatory_chunks "
+                "SET metadata = jsonb_set(metadata, '{is_current}', 'true') "
+                "WHERE (metadata->>'is_current')::boolean IS DISTINCT FROM true"
+            )
+            chunk_count = cur.rowcount
+        _conn.commit()
+        if src_count or chunk_count:
+            print(f"[LIFESPAN] backfill is_current: {src_count} sources, "
+                  f"{chunk_count} chunks", flush=True, file=sys.stdout)
+
         _conn.close()
         print(f"[LIFESPAN] regulatory_chunks table ready (dim={dim})",
               flush=True, file=sys.stdout)
@@ -271,7 +291,7 @@ def _run_ingest_background(source_id: str, correlation_id: str):
 async def upload_regulatory_source(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    is_current: bool = Form(False),
+    is_current: bool = Form(True),
 ):
     cid = _new_correlation_id()
     _sources_logger.info(

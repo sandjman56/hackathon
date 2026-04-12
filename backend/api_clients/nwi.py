@@ -8,6 +8,18 @@ logger = logging.getLogger("eia.api_clients.nwi")
 # Endpoint: https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/0/query
 
 
+def _attr(feature: dict, field: str):
+    """Get an attribute by unqualified name, handling table-qualified keys
+    like 'Wetlands.WETLAND_TYPE' that the USFWS MapServer now returns."""
+    attrs = feature.get("attributes", {})
+    if field in attrs:
+        return attrs[field]
+    for key, val in attrs.items():
+        if key.endswith(f".{field}"):
+            return val
+    return None
+
+
 def query_nwi(lat: float, lon: float, client: httpx.Client) -> dict:
     """Query the National Wetlands Inventory within 1 km of the project location."""
     url = (
@@ -22,7 +34,7 @@ def query_nwi(lat: float, lon: float, client: httpx.Client) -> dict:
         "spatialRel": "esriSpatialRelIntersects",
         "distance": 1000,
         "units": "esriSRUnit_Meter",
-        "outFields": "ATTRIBUTE,WETLAND_TYPE,ACRES",
+        "outFields": "*",
         "returnGeometry": "false",
         "f": "json",
     }
@@ -35,9 +47,9 @@ def query_nwi(lat: float, lon: float, client: httpx.Client) -> dict:
         "count": len(features),
         "wetlands": [
             {
-                "type": f["attributes"].get("WETLAND_TYPE", ""),
-                "attribute": f["attributes"].get("ATTRIBUTE", ""),
-                "acres": f["attributes"].get("ACRES"),
+                "type": _attr(f, "WETLAND_TYPE"),
+                "attribute": _attr(f, "ATTRIBUTE"),
+                "acres": _attr(f, "ACRES"),
             }
             for f in features
         ],

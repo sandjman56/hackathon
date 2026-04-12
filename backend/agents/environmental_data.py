@@ -53,12 +53,32 @@ class EnvironmentalDataAgent:
             for key, fn in _API_CALLS:
                 try:
                     results[key] = fn(lat, lon, client)
-                    logger.info("[EnvironmentalData] \u2713 %s", key)
-                except Exception as exc:
-                    logger.warning("[EnvironmentalData] \u2717 %s — %s: %s",
-                                   key, type(exc).__name__, exc)
+                    logger.info("[EnvironmentalData] ✓ %s", key)
+                except httpx.TimeoutException as exc:
+                    logger.warning(
+                        "[EnvironmentalData] ✗ %s — TIMEOUT after 30s: %s",
+                        key, exc,
+                    )
                     results[key] = {}
-                    results["errors"][key] = str(exc)
+                    results["errors"][key] = f"Timeout: {exc}"
+                except httpx.HTTPStatusError as exc:
+                    logger.warning(
+                        "[EnvironmentalData] ✗ %s — HTTP %d from %s: %s",
+                        key, exc.response.status_code,
+                        exc.request.url.host, exc.response.text[:300],
+                    )
+                    results[key] = {}
+                    results["errors"][key] = (
+                        f"HTTP {exc.response.status_code}: "
+                        f"{exc.response.text[:200]}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[EnvironmentalData] ✗ %s — %s: %s",
+                        key, type(exc).__name__, exc,
+                    )
+                    results[key] = {}
+                    results["errors"][key] = f"{type(exc).__name__}: {exc}"
 
         n_ok = sum(1 for k in results if k not in ("query_location", "errors") and results[k])
         n_err = len(results["errors"])
@@ -67,6 +87,8 @@ class EnvironmentalDataAgent:
         if n_err:
             logger.warning("[EnvironmentalData] Failed APIs: %s",
                            list(results["errors"].keys()))
+            for api_key, err_msg in results["errors"].items():
+                logger.warning("[EnvironmentalData]   %s → %s", api_key, err_msg)
 
         state["environmental_data"] = results
         return state

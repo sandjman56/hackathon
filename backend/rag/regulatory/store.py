@@ -53,11 +53,34 @@ def init_regulatory_table(
 ) -> None:
     """Create the table, vector index, and JSONB GIN index if missing.
 
-    Idempotent — safe to call on every ingestion run.
+    If the table already exists with a different vector dimension, drops and
+    recreates it. CREATE TABLE IF NOT EXISTS silently masks dimension
+    mismatches — this function detects and fixes them.
     """
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
         cur.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto";')
+
+        # Check if the table exists with a mismatched vector dimension.
+        cur.execute(
+            """
+            SELECT a.atttypmod FROM pg_attribute a
+            JOIN pg_class c ON a.attrelid = c.oid
+            WHERE c.relname = %s AND a.attname = 'embedding'
+            """,
+            (table_name,),
+        )
+        row = cur.fetchone()
+        if row is not None and row[0] != embedding_dim:
+            old_dim = row[0]
+            logger.warning(
+                "Vector dimension mismatch on %s: column is %d, provider is %d "
+                "— dropping and recreating table",
+                table_name, old_dim, embedding_dim,
+            )
+            cur.execute(f"DROP TABLE {table_name} CASCADE;")
+            conn.commit()
+
         cur.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {table_name} (
@@ -86,8 +109,6 @@ def init_regulatory_table(
                 ON {table_name} USING GIN (metadata jsonb_path_ops);
             """
         )
-        # HNSW index for cosine similarity. Supports up to 4000 dimensions
-        # (IVFFlat caps at 2000, which breaks gemini-embedding-001 at 3072).
         cur.execute(
             f"""
             CREATE INDEX IF NOT EXISTS {table_name}_embedding_cosine_idx

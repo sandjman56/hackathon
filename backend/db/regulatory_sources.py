@@ -70,7 +70,7 @@ def init_regulatory_sources_table(conn: Any) -> None:
                 embedding_dim         INT,
                 embedding_started_at  TIMESTAMPTZ,
                 embedding_finished_at TIMESTAMPTZ,
-                is_current            BOOLEAN     NOT NULL DEFAULT FALSE
+                is_current            BOOLEAN     NOT NULL DEFAULT TRUE
             );
             """
         )
