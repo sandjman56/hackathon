@@ -2,7 +2,7 @@ import os
 
 import ollama
 
-from .base import LLMProvider
+from .base import LLMProvider, LLMResult
 
 
 class OllamaProvider(LLMProvider):
@@ -17,13 +17,18 @@ class OllamaProvider(LLMProvider):
     def provider_name(self) -> str:
         return "ollama"
 
-    def complete(self, prompt: str, system: str = None) -> str:
+    def complete(self, prompt: str, system: str = None) -> LLMResult:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         response = self._client.chat(model=self._model, messages=messages)
-        return response["message"]["content"]
+        return LLMResult(
+            text=response["message"]["content"],
+            input_tokens=0,
+            output_tokens=0,
+            model="ollama-local",
+        )
 
     def embed(self, text: str) -> list[float]:
         response = self._client.embeddings(model=self._model, prompt=text)
