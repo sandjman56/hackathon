@@ -37,6 +37,7 @@ class DocumentType(str, Enum):
     CFR_REGULATION = "cfr_regulation"
     STATUTE = "statute"
     EXECUTIVE_ORDER = "executive_order"
+    STATE_CODE = "state_code"
 
 
 @dataclass
