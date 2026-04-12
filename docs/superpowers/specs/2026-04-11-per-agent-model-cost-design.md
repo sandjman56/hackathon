@@ -132,18 +132,24 @@ For each provider, capture both **input** and **output** token prices (they diff
 
 ### Models priced (the full dropdown set)
 
-| Model ID (pricing.py key) | Label | Provider |
-|---|---|---|
-| `gpt-4o` | `OpenAI · GPT-4o` | openai |
-| `gpt-4o-mini` | `OpenAI · GPT-4o mini` | openai |
-| `claude-opus-4-6` | `Claude · Opus 4.6` | anthropic |
-| `claude-sonnet-4-6` | `Claude · Sonnet 4.6` | anthropic |
-| `claude-haiku-4-5-20251001` | `Claude · Haiku 4.5` | anthropic |
-| `gemini-2.5-pro` | `Gemini · 2.5 Pro` | gemini |
-| `gemini-2.5-flash` | `Gemini · 2.5 Flash` | gemini |
-| `gemini-2.0-flash` | `Gemini · 2.0 Flash` | gemini |
+Verified against each provider's pricing page on 2026-04-11:
 
-If a web search reveals a model has been renamed or deprecated on implementation day, swap it for the current equivalent and note the substitution in the commit message.
+| Model ID (pricing.py key) | Label | Provider | Input $/MTok | Output $/MTok |
+|---|---|---|---|---|
+| `gpt-5.4` | `OpenAI · GPT-5.4` | openai | 2.50 | 15.00 |
+| `gpt-5.4-mini` | `OpenAI · GPT-5.4 mini` | openai | 0.75 | 4.50 |
+| `claude-opus-4-6` | `Claude · Opus 4.6` | anthropic | 5.00 | 25.00 |
+| `claude-sonnet-4-6` | `Claude · Sonnet 4.6` | anthropic | 3.00 | 15.00 |
+| `claude-haiku-4-5-20251001` | `Claude · Haiku 4.5` | anthropic | 1.00 | 5.00 |
+| `gemini-2.5-pro` | `Gemini · 2.5 Pro` | gemini | 1.25 | 10.00 |
+| `gemini-2.5-flash` | `Gemini · 2.5 Flash` | gemini | 0.30 | 2.50 |
+| `gemini-2.0-flash` | `Gemini · 2.0 Flash` | gemini | 0.10 | 0.40 |
+
+**Deprecation notice:** `gemini-2.0-flash` is officially scheduled for shutdown on 2026-06-01. Because the current branch uses it as the default for every Gemini-consuming agent, `DEFAULT_MODELS` in this feature migrates to `gemini-2.5-flash` instead (same provider, Flash tier, ~3× cost but still sub-cent per call for this pipeline's prompt sizes). Users can still select `gemini-2.0-flash` from the dropdown until shutdown if they want the old default.
+
+**OpenAI note:** As of 2026-04-11, OpenAI's pricing page lists `gpt-5.4` as the current flagship and `gpt-5.4-mini` as the efficient variant; `gpt-4o` / `gpt-4o-mini` are no longer shown. The existing `OPENAI_MODEL` env var fallback in `openai_provider.py` stays untouched by this feature — only the new dropdown list is affected.
+
+If a future web search reveals a model has been renamed or deprecated, swap it for the current equivalent, update the prices, bump `LAST_UPDATED`, and note the substitution in the commit message.
 
 **Refresh workflow** (documented for future use): ask an agent "refresh `backend/llm/pricing.py`". The agent re-runs the three searches above, updates the numbers + `LAST_UPDATED`, and commits. No DB migration, no restart needed beyond a normal redeploy.
 
