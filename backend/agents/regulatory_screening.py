@@ -54,9 +54,29 @@ class RegulatoryScreeningAgent:
         log = lambda m, *a: logger.info(f"[regulatory:{cid}] " + m, *a)
         warn = lambda m, *a: logger.warning(f"[regulatory:{cid}] " + m, *a)
 
-        log("starting")
+        log("starting — llm=%s embedder=%s",
+            getattr(self.llm, "provider_name", "?"),
+            getattr(self.embedding_provider, "provider_name", "?"))
+
+        # ── Input state: what the RAG query is being built from ──────────────
+        parsed = state.get("parsed_project") or {}
+        env = state.get("environmental_data") or {}
+        log("parsed_project: %s", json.dumps(parsed, default=str))
+        fema = env.get("fema_flood_zones") or {}
+        species = env.get("usfws_species") or {}
+        wetlands = env.get("nwi_wetlands") or {}
+        farmland = env.get("usda_farmland") or {}
+        log(
+            "env flags: in_sfha=%s species_count=%s wetlands_count=%s prime_farmland=%s",
+            fema.get("in_sfha", False),
+            species.get("count", 0),
+            wetlands.get("count", 0),
+            farmland.get("is_prime", False),
+        )
+
+        # ── RAG input: the exact string being embedded ───────────────────────
         query_text = self._build_query_text(state)
-        log("query_text built: %d chars", len(query_text))
+        log("RAG query_text (%d chars): %s", len(query_text), query_text)
 
         t0 = time.time()
         query_vec = self.embedding_provider.embed(query_text)
@@ -65,6 +85,9 @@ class RegulatoryScreeningAgent:
 
         conn = _get_connection()
         try:
+            # Log corpus composition so it's obvious how much of the retriever
+            # ceiling is "only the NEPA PDF is loaded".
+            self._log_corpus_stats(conn, log, warn)
             hits = search_regulations(
                 conn, query_vec, top_k=_TOP_K,
                 filters={"is_current": True},
@@ -74,26 +97,101 @@ class RegulatoryScreeningAgent:
                 conn.close()
             except Exception:
                 pass
-        log("retrieved %d chunks", len(hits))
+        log("retrieved %d chunks (top_k=%d, filter is_current=True)",
+            len(hits), _TOP_K)
 
         if not hits:
             warn("empty corpus or zero hits — returning []")
             state["regulations"] = []
             return state
 
-        sims = [h.get("similarity", 0.0) for h in hits]
-        log("similarity range %.2f-%.2f", min(sims), max(sims))
+        # ── RAG output: every chunk the retriever returned ───────────────────
+        for i, h in enumerate(hits, 1):
+            meta = h.get("metadata") or {}
+            content = (h.get("content") or "").replace("\n", " ").strip()
+            breadcrumb = (meta.get("breadcrumb") or h.get("breadcrumb") or "")
+            log(
+                "chunk[%d] sim=%.3f citation=%s source=%s is_current=%s "
+                "is_definition=%s breadcrumb=%r",
+                i,
+                h.get("similarity", 0.0),
+                meta.get("citation", "?"),
+                meta.get("source", "?"),
+                meta.get("is_current"),
+                meta.get("is_definition"),
+                breadcrumb[:160],
+            )
+            log("chunk[%d] preview: %s", i, content[:400])
 
+        sims = [h.get("similarity", 0.0) for h in hits]
+        log("similarity min=%.3f max=%.3f mean=%.3f",
+            min(sims), max(sims), sum(sims) / len(sims))
+
+        # ── LLM call: the full prompt and raw response ───────────────────────
         prompt = self._build_prompt(state, hits)
+        log("prompt built: %d chars", len(prompt))
+        log("prompt body (first 2000 chars):\n%s", prompt[:2000])
+
         log("LLM call begin")
         t0 = time.time()
-        raw = self.llm.complete(prompt, system=_SYSTEM)
+        llm_result = self.llm.complete(prompt, system=_SYSTEM)
+        raw = llm_result.text
         log("LLM returned in %.2fs (%d chars)", time.time() - t0, len(raw or ""))
+        log("LLM raw response (first 2000 chars): %s", (raw or "")[:2000])
+        log("LLM tokens: input=%d output=%d model=%s",
+            llm_result.input_tokens, llm_result.output_tokens, llm_result.model)
 
         regs = self._parse_llm_json(raw)
         log("parsed %d regulations", len(regs))
+        for i, r in enumerate(regs, 1):
+            log(
+                "regulation[%d] name=%r jurisdiction=%r citation=%r",
+                i, r.get("name"), r.get("jurisdiction"), r.get("citation"),
+            )
+
+        state.setdefault("_usage", {})["regulatory_screening"] = {
+            "input_tokens": llm_result.input_tokens,
+            "output_tokens": llm_result.output_tokens,
+            "model": llm_result.model,
+        }
         state["regulations"] = regs
         return state
+
+    def _log_corpus_stats(self, conn, log, warn) -> None:
+        """Log regulatory_chunks composition so corpus limits are visible.
+
+        Counts are grouped by (source, is_current) because the ``is_current``
+        filter applied during retrieval silently drops the 2005 NEPA reprint
+        chunks — surfacing that here makes "we only have one source loaded"
+        obvious at a glance in the Brain Scanner log stream.
+        """
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        metadata->>'source' AS source,
+                        (metadata->>'is_current')::boolean AS is_current,
+                        COUNT(*) AS n
+                    FROM regulatory_chunks
+                    GROUP BY 1, 2
+                    ORDER BY n DESC;
+                    """
+                )
+                rows = cur.fetchall()
+        except Exception as exc:
+            warn("corpus stats query failed: %s", exc)
+            return
+
+        if not rows:
+            warn("corpus EMPTY — regulatory_chunks table has 0 rows")
+            return
+
+        total = sum(r[2] for r in rows)
+        log("corpus: %d total chunks across %d (source, is_current) group(s)",
+            total, len(rows))
+        for source, is_current, n in rows:
+            log("  source=%r is_current=%s chunks=%d", source, is_current, n)
 
     # --- helpers --------------------------------------------------------
 

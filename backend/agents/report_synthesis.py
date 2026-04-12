@@ -1,7 +1,5 @@
 import logging
 
-from llm.base import LLMProvider
-
 logger = logging.getLogger("eia.agents.report_synthesis")
 
 
@@ -10,11 +8,11 @@ class ReportSynthesisAgent:
     matrix and identified regulations, producing a structured report suitable
     for regulatory submission."""
 
-    def __init__(self, llm: LLMProvider):
-        self.llm = llm
+    def __init__(self):
+        pass
 
     def run(self, state: dict) -> dict:
-        logger.info("[ReportSynthesis] Starting — LLM provider: %s", self.llm.provider_name)
+        logger.info("[ReportSynthesis] Starting (stub — no LLM)")
 
         matrix = state.get("impact_matrix", [])
         regs = state.get("regulations", [])
@@ -35,8 +33,6 @@ class ReportSynthesisAgent:
                     "Executive Summary, Project Description, Environmental Setting, "
                     "Impact Analysis, Mitigation Measures, Regulatory Compliance, "
                     "Conclusions")
-        logger.info("[ReportSynthesis] Invoking %s for narrative generation...",
-                    self.llm.provider_name)
         logger.warning("[ReportSynthesis] STUB — LLM report generation not yet implemented; "
                        "report set to empty string")
 

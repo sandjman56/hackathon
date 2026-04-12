@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import SourcesModal from './SourcesModal.jsx'
+import ModelDropdown from './ModelDropdown.jsx'
 
 const AGENTS = [
   { key: 'project_parser', name: 'PROJECT PARSER' },
@@ -224,9 +225,31 @@ function renderAgentOutput(agentKey, data) {
   }
 }
 
+// ── Cost chip ─────────────────────────────────────────────────────────────────
+
+function CostChip({ cost }) {
+  if (cost === undefined || cost === null || cost === 0) {
+    return <span data-testid="cost-chip" style={{ ...styles.costChip, color: 'var(--text-muted)' }}>{'—'}</span>
+  }
+  if (cost < 0.0001) {
+    return <span data-testid="cost-chip" style={{ ...styles.costChip, color: 'var(--text-secondary)' }}>&lt;$0.0001</span>
+  }
+  const color = cost >= 1.0 ? 'var(--yellow-warn)' : 'var(--text-secondary)'
+  const formatted = cost >= 1.0 ? `$${cost.toFixed(2)}` : `$${cost.toFixed(4)}`
+  return <span data-testid="cost-chip" style={{ ...styles.costChip, color }}>{formatted}</span>
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export default function AgentPipeline({ pipelineState, agentOutputs = {} }) {
+export default function AgentPipeline({
+  pipelineState,
+  agentOutputs = {},
+  selections = {},
+  setSelection,
+  availableProviders = {},
+  modelCatalog = [],
+  agentCosts = {},
+}) {
   const [openAgent, setOpenAgent] = useState(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
 
@@ -236,7 +259,13 @@ export default function AgentPipeline({ pipelineState, agentOutputs = {} }) {
 
   return (
     <div>
-      <div style={styles.label}>PIPELINE STATUS</div>
+      <div style={styles.label}>
+        <span>PIPELINE STATUS</span>
+        <span style={styles.totalChip}>
+          TOTAL{' '}
+          <CostChip cost={Object.values(agentCosts).reduce((sum, c) => sum + (c?.cost_usd || 0), 0)} />
+        </span>
+      </div>
       <div style={styles.list}>
         {AGENTS.map((agent, i) => {
           const status = pipelineState[agent.key] || 'idle'
@@ -257,6 +286,14 @@ export default function AgentPipeline({ pipelineState, agentOutputs = {} }) {
               >
                 <span style={getDotStyle(status)} />
                 <span style={styles.agentName}>{agent.name}</span>
+                <ModelDropdown
+                  agentKey={agent.key}
+                  selections={selections}
+                  setSelection={setSelection || (() => {})}
+                  availableProviders={availableProviders}
+                  modelCatalog={modelCatalog}
+                />
+                <CostChip cost={agentCosts[agent.key]?.cost_usd} />
                 {isRegulatory && (
                   <button
                     type="button"
@@ -309,8 +346,11 @@ const styles = {
     fontFamily: 'var(--font-mono)',
     fontSize: '11px',
     color: 'var(--green-primary)',
-    letterSpacing: '3px',
-    marginBottom: '20px',
+    letterSpacing: '1.5px',
+    marginBottom: '16px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   list: {
     display: 'flex',
@@ -349,6 +389,18 @@ const styles = {
     fontSize: '12px',
     color: 'var(--green-primary)',
     flexShrink: 0,
+  },
+  costChip: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    padding: '1px 4px',
+    flexShrink: 0,
+  },
+  totalChip: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: 'var(--text-secondary)',
+    marginLeft: 'auto',
   },
   sourcesBtn: {
     fontFamily: 'var(--font-mono)',

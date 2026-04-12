@@ -14,7 +14,7 @@ const AGENTS = [
   'report_synthesis',
 ]
 
-export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange }) {
+export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate }) {
   const [projectName, setProjectName] = useState('')
   const [coordinates, setCoordinates] = useState('')
   const [description, setDescription] = useState('')
@@ -86,6 +86,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
           project_name: projectName,
           coordinates,
           description,
+          models: modelSelections || {},
         }),
       })
 
@@ -161,6 +162,10 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
 
       case 'agent_error':
         if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
+        break
+
+      case 'agent_cost':
+        onCostUpdate?.(data)
         break
 
       case 'result':

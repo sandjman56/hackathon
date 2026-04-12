@@ -1,4 +1,14 @@
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
+
+
+@dataclass
+class LLMResult:
+    """Return type for LLMProvider.complete() — carries token counts for cost tracking."""
+    text: str
+    input_tokens: int
+    output_tokens: int
+    model: str  # exact model id; matches a pricing.py key
 
 
 class LLMProvider(ABC):
@@ -7,20 +17,16 @@ class LLMProvider(ABC):
     @property
     @abstractmethod
     def provider_name(self) -> str:
-        """Return the name of this provider (e.g. 'openai', 'anthropic', 'ollama')."""
         raise NotImplementedError("Subclasses must implement provider_name")
 
     @abstractmethod
-    def complete(self, prompt: str, system: str = None) -> str:
-        """Generate a completion for the given prompt."""
+    def complete(self, prompt: str, system: str = None) -> LLMResult:
         raise NotImplementedError("Subclasses must implement complete()")
 
     @abstractmethod
     def embed(self, text: str) -> list[float]:
-        """Return an embedding vector for the given text."""
         raise NotImplementedError("Subclasses must implement embed()")
 
     @abstractmethod
     def chat(self, messages: list[dict]) -> str:
-        """Generate a response given a list of chat messages."""
         raise NotImplementedError("Subclasses must implement chat()")

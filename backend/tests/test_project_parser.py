@@ -9,13 +9,19 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agents.project_parser import ProjectParserAgent
+from llm.base import LLMResult
 
 
 def make_llm(response: str) -> MagicMock:
-    """Return a mock LLMProvider whose complete() returns `response`."""
+    """Return a mock LLMProvider whose complete() returns an LLMResult."""
     llm = MagicMock()
     llm.provider_name = "mock"
-    llm.complete.return_value = response
+    llm.complete.return_value = LLMResult(
+        text=response,
+        input_tokens=10,
+        output_tokens=5,
+        model="mock-model",
+    )
     return llm
 
 
@@ -59,6 +65,13 @@ class TestProjectParserHappyPath(unittest.TestCase):
 
     def test_llm_called_once(self):
         self.agent.llm.complete.call_count == 1
+
+    def test_usage_populated(self):
+        usage = self.result.get("_usage", {}).get("project_parser")
+        self.assertIsNotNone(usage)
+        self.assertEqual(usage["input_tokens"], 10)
+        self.assertEqual(usage["output_tokens"], 5)
+        self.assertEqual(usage["model"], "mock-model")
 
 
 class TestProjectParserMarkdownFences(unittest.TestCase):

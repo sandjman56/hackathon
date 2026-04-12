@@ -48,8 +48,10 @@ class ProjectParserAgent:
             description=description,
         )
 
+        llm_result = None
         try:
-            raw = self.llm.complete(prompt, system=_SYSTEM)
+            llm_result = self.llm.complete(prompt, system=_SYSTEM)
+            raw = llm_result.text
             logger.info("[ProjectParser] LLM response: %s", raw[:300])
 
             # Strip markdown code fences if present
@@ -70,6 +72,13 @@ class ProjectParserAgent:
                 "project_type": "unknown",
                 "scale": "unknown",
                 "location": coordinates or "unknown",
+            }
+
+        if llm_result:
+            state.setdefault("_usage", {})["project_parser"] = {
+                "input_tokens": llm_result.input_tokens,
+                "output_tokens": llm_result.output_tokens,
+                "model": llm_result.model,
             }
 
         state["parsed_project"] = result
