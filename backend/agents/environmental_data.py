@@ -7,7 +7,6 @@ from api_clients.nwi import query_nwi
 from api_clients.fema import query_fema
 from api_clients.farmland import query_farmland
 from api_clients.ejscreen import query_ejscreen
-from llm.base import LLMProvider
 
 logger = logging.getLogger("eia.agents.environmental_data")
 
@@ -33,8 +32,8 @@ class EnvironmentalDataAgent:
     """Queries all 5 federal REST APIs (USFWS, NWI, FEMA, Farmland, EJScreen)
     by project coordinates and returns raw geodata for downstream analysis."""
 
-    def __init__(self, llm: LLMProvider):
-        self.llm = llm
+    def __init__(self):
+        pass
 
     def run(self, state: dict) -> dict:
         coordinates = state.get("coordinates", "")
@@ -54,9 +53,9 @@ class EnvironmentalDataAgent:
             for key, fn in _API_CALLS:
                 try:
                     results[key] = fn(lat, lon, client)
-                    logger.info("[EnvironmentalData] ✓ %s", key)
+                    logger.info("[EnvironmentalData] \u2713 %s", key)
                 except Exception as exc:
-                    logger.warning("[EnvironmentalData] ✗ %s — %s: %s",
+                    logger.warning("[EnvironmentalData] \u2717 %s — %s: %s",
                                    key, type(exc).__name__, exc)
                     results[key] = {}
                     results["errors"][key] = str(exc)

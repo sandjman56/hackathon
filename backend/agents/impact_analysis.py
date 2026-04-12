@@ -1,7 +1,5 @@
 import logging
 
-from llm.base import LLMProvider
-
 logger = logging.getLogger("eia.agents.impact_analysis")
 
 
@@ -10,11 +8,11 @@ class ImpactAnalysisAgent:
     significance matrix across environmental impact categories (wetlands,
     endangered species, floodplains, farmland, environmental justice, etc.)."""
 
-    def __init__(self, llm: LLMProvider):
-        self.llm = llm
+    def __init__(self):
+        pass
 
     def run(self, state: dict) -> dict:
-        logger.info("[ImpactAnalysis] Starting — LLM provider: %s", self.llm.provider_name)
+        logger.info("[ImpactAnalysis] Starting (stub — no LLM)")
 
         env = state.get("environmental_data", {})
         regs = state.get("regulations", [])
@@ -64,8 +62,6 @@ class ImpactAnalysisAgent:
                     "environmental_justice, air_quality, noise, traffic")
         logger.info("[ImpactAnalysis] Significance scale: significant / moderate / "
                     "minimal / none")
-        logger.info("[ImpactAnalysis] Invoking %s for LLM-driven matrix scoring...",
-                    self.llm.provider_name)
         logger.warning("[ImpactAnalysis] STUB — LLM impact scoring not yet implemented; "
                        "impact_matrix set to []")
 
