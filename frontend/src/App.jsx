@@ -4,6 +4,7 @@ import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
 import BrainScanner from './components/BrainScanner.jsx'
 import DatabaseView from './components/DatabaseView.jsx'
+import useModelSelections from './hooks/useModelSelections.js'
 
 const AGENTS = [
   'project_parser',
@@ -22,6 +23,12 @@ function App() {
   const [logs, setLogs]         = useState([])
   const [running, setRunning]   = useState(false)
   const [view, setView]         = useState('main')
+  const { selections, setSelection, availableProviders, modelCatalog } = useModelSelections()
+  const [agentCosts, setAgentCosts] = useState({})
+
+  const handleCostUpdate = (data) => {
+    setAgentCosts((prev) => ({ ...prev, [data.agent]: data }))
+  }
 
   const handleResult = (data) => {
     setResults(data)
@@ -46,6 +53,7 @@ function App() {
   }
 
   const handleRunningChange = (isRunning) => {
+    if (isRunning) setAgentCosts({})
     setRunning(isRunning)
   }
 
@@ -77,7 +85,6 @@ function App() {
           >
             VIEW DB
           </button>
-          <span style={styles.providerBadge}>Gemini</span>
           <span style={styles.statusChip}>SYSTEM ONLINE</span>
         </div>
       </header>
@@ -94,6 +101,8 @@ function App() {
               onStepsUpdate={handleStepsUpdate}
               onLog={handleLog}
               onRunningChange={handleRunningChange}
+              modelSelections={selections}
+              onCostUpdate={handleCostUpdate}
             />
           </div>
 
@@ -102,7 +111,15 @@ function App() {
           {/* Middle: pipeline status + results */}
           <div style={styles.colMiddle}>
             <div style={styles.colMiddleTop}>
-              <AgentPipeline pipelineState={pipelineState} agentOutputs={agentOutputs} />
+              <AgentPipeline
+                pipelineState={pipelineState}
+                agentOutputs={agentOutputs}
+                selections={selections}
+                setSelection={setSelection}
+                availableProviders={availableProviders}
+                modelCatalog={modelCatalog}
+                agentCosts={agentCosts}
+              />
             </div>
             <div style={styles.colMiddleBottom}>
               <ResultsPanel results={results} />
@@ -192,14 +209,6 @@ const styles = {
     borderRadius: '4px',
     padding: '4px 10px',
     cursor: 'pointer',
-  },
-  providerBadge: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    color: 'var(--text-secondary)',
-    padding: '4px 10px',
-    border: '1px solid var(--border)',
-    borderRadius: '4px',
   },
   statusChip: {
     fontFamily: 'var(--font-mono)',
