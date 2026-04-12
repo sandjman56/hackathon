@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from llm.base import LLMResult
+
 from db.regulatory_sources import init_regulatory_sources_table
 from rag.regulatory.store import init_regulatory_table
 
@@ -56,12 +58,17 @@ def test_agent_returns_regs_when_corpus_present(initialized, monkeypatch):
 
     fake_llm = MagicMock()
     fake_llm.provider_name = "fake"
-    fake_llm.complete.return_value = json.dumps([{
-        "name": "NEPA Environmental Assessment",
-        "jurisdiction": "Federal",
-        "description": "Triggered by 40 CFR 1501.3.",
-        "citation": "40 CFR §1501.3",
-    }])
+    fake_llm.complete.return_value = LLMResult(
+        text=json.dumps([{
+            "name": "NEPA Environmental Assessment",
+            "jurisdiction": "Federal",
+            "description": "Triggered by 40 CFR 1501.3.",
+            "citation": "40 CFR §1501.3",
+        }]),
+        input_tokens=123,
+        output_tokens=45,
+        model="claude-haiku-4-5-20251001",
+    )
 
     # Patch _get_connection so the agent uses our test conn
     from agents import regulatory_screening as agent_mod
@@ -83,6 +90,11 @@ def test_agent_returns_regs_when_corpus_present(initialized, monkeypatch):
     assert isinstance(out["regulations"], list)
     assert len(out["regulations"]) == 1
     assert out["regulations"][0]["citation"] == "40 CFR §1501.3"
+    usage = out.get("_usage", {}).get("regulatory_screening")
+    assert usage is not None
+    assert usage["input_tokens"] == 123
+    assert usage["output_tokens"] == 45
+    assert usage["model"] == "claude-haiku-4-5-20251001"
 
 
 def test_agent_empty_corpus_returns_empty(initialized, monkeypatch):
@@ -110,7 +122,12 @@ def test_agent_invalid_llm_json_returns_empty(initialized, monkeypatch):
 
     fake_llm = MagicMock()
     fake_llm.provider_name = "fake"
-    fake_llm.complete.return_value = "not valid json at all"
+    fake_llm.complete.return_value = LLMResult(
+        text="not valid json at all",
+        input_tokens=50,
+        output_tokens=10,
+        model="mock-model",
+    )
 
     from agents import regulatory_screening as agent_mod
     monkeypatch.setattr(agent_mod, "_get_connection", lambda: _NoCloseConn(conn))
