@@ -278,6 +278,42 @@ class TestRealPdfSmoke(unittest.TestCase):
             )
 
 
+# --- xref -----------------------------------------------------------------
+
+from rag.regulatory.xref import extract_cross_references  # noqa: E402
+
+
+class TestPaCodeXref(unittest.TestCase):
+
+    def test_extracts_pa_code_ref(self):
+        text = "as defined in 25 Pa. Code § 105.14(b) relating to review."
+        refs = extract_cross_references(text)
+        self.assertIn("25 Pa. Code § 105.14", refs)
+
+    def test_extracts_bare_pa_section_ref(self):
+        text = "the factors included in § 105.13(d) and § 105.14(b)."
+        refs = extract_cross_references(text, self_citation="25 Pa. Code § 105.15")
+        self.assertIn("25 Pa. Code § 105.13", refs)
+        self.assertIn("25 Pa. Code § 105.14", refs)
+
+    def test_extracts_pa_statute_ref(self):
+        text = "Dam Safety and Encroachments Act (32 P.S. §§ 693.1—693.27)."
+        refs = extract_cross_references(text)
+        self.assertIn("32 P.S. § 693.1", refs)
+
+    def test_excludes_self_citation(self):
+        text = "25 Pa. Code § 105.14 and 25 Pa. Code § 105.15."
+        refs = extract_cross_references(text, self_citation="25 Pa. Code § 105.14")
+        self.assertNotIn("25 Pa. Code § 105.14", refs)
+        self.assertIn("25 Pa. Code § 105.15", refs)
+
+    def test_existing_federal_refs_still_work(self):
+        text = "as required by 40 CFR §1501.3 and 42 USC §4332."
+        refs = extract_cross_references(text)
+        self.assertIn("40 CFR §1501.3", refs)
+        self.assertIn("42 USC §4332", refs)
+
+
 # --- breadcrumbs ----------------------------------------------------------
 
 from rag.regulatory.breadcrumbs import build_breadcrumb  # noqa: E402
