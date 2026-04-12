@@ -8,6 +8,8 @@ from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 
 from llm.base import LLMProvider
+from llm.provider_factory import get_llm_for_model, MissingAPIKeyError, UnknownModelError
+from llm.pricing import cost_usd
 from agents.project_parser import ProjectParserAgent
 from agents.environmental_data import EnvironmentalDataAgent
 from agents.regulatory_screening import RegulatoryScreeningAgent
@@ -141,6 +143,20 @@ AGENT_OUTPUT_KEYS = {
     "report_synthesis": "report",
 }
 
+DEFAULT_MODELS: dict[str, str] = {
+    "project_parser":       "gemini-2.5-flash",
+    "environmental_data":   "gemini-2.5-flash",   # not used (non-LLM agent)
+    "regulatory_screening": "claude-haiku-4-5-20251001",
+    "impact_analysis":      "gemini-2.5-flash",   # not used (stub)
+    "report_synthesis":     "gemini-2.5-flash",   # not used (stub)
+}
+
+NON_LLM_AGENTS = frozenset({
+    "environmental_data",
+    "impact_analysis",
+    "report_synthesis",
+})
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -148,12 +164,14 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_provider: LLMProvider, screening_llm: LLMProvider | None = None):
+def _make_agent_node(agent_key: str, agent_class, resolved_llms: dict, embedding_provider: LLMProvider):
     """Create a LangGraph node function wrapping an agent's .run() call."""
-    if agent_key == "regulatory_screening":
-        agent = agent_class(screening_llm or llm, embedding_provider)
+    if agent_key in NON_LLM_AGENTS:
+        agent = agent_class()
+    elif agent_key == "regulatory_screening":
+        agent = agent_class(resolved_llms[agent_key], embedding_provider)
     else:
-        agent = agent_class(llm)
+        agent = agent_class(resolved_llms[agent_key])
 
     def node_fn(state: EIAPipelineState) -> dict:
         logger.info("[GRAPH] Entering node: %s", agent_key)
@@ -181,11 +199,11 @@ def _make_agent_node(agent_key: str, agent_class, llm: LLMProvider, embedding_pr
     return node_fn
 
 
-def build_pipeline(llm: LLMProvider, embedding_provider: LLMProvider, screening_llm: LLMProvider | None = None):
+def build_pipeline(resolved_llms: dict[str, LLMProvider], embedding_provider: LLMProvider):
     """Construct and compile the EIA LangGraph pipeline."""
     graph = StateGraph(EIAPipelineState)
     for agent_key, agent_class in AGENT_REGISTRY:
-        graph.add_node(agent_key, _make_agent_node(agent_key, agent_class, llm, embedding_provider, screening_llm))
+        graph.add_node(agent_key, _make_agent_node(agent_key, agent_class, resolved_llms, embedding_provider))
     prev = START
     for agent_key, _ in AGENT_REGISTRY:
         graph.add_edge(prev, agent_key)
@@ -198,11 +216,15 @@ def run_eia_pipeline(
     project_name: str,
     coordinates: str,
     description: str,
-    llm: LLMProvider,
+    models: dict[str, str],
     embedding_provider: LLMProvider,
-    screening_llm: LLMProvider | None = None,
 ) -> dict:
-    compiled = build_pipeline(llm, embedding_provider, screening_llm)
+    resolved_llms = {}
+    for agent_key, _ in AGENT_REGISTRY:
+        if agent_key not in NON_LLM_AGENTS:
+            model_id = models.get(agent_key) or DEFAULT_MODELS[agent_key]
+            resolved_llms[agent_key] = get_llm_for_model(model_id)
+    compiled = build_pipeline(resolved_llms, embedding_provider)
     initial_state: EIAPipelineState = {
         "project_name": project_name,
         "coordinates": coordinates,
@@ -232,9 +254,8 @@ def stream_eia_pipeline(
     project_name: str,
     coordinates: str,
     description: str,
-    llm: LLMProvider,
+    models: dict[str, str],
     embedding_provider: LLMProvider,
-    screening_llm: LLMProvider | None = None,
 ):
     """Execute the EIA pipeline as a generator yielding SSE events.
 
@@ -244,8 +265,7 @@ def stream_eia_pipeline(
     # Print-based panic log: guaranteed stdout even if logging config is broken.
     print(
         f"[PIPELINE] stream_eia_pipeline entered — "
-        f"project={project_name!r} "
-        f"provider={getattr(llm, 'provider_name', '<unknown>')}",
+        f"project={project_name!r} models={models}",
         flush=True, file=sys.stderr,
     )
 
@@ -255,6 +275,22 @@ def stream_eia_pipeline(
     log_buffer = _SSELogBuffer()
     eia_root = logging.getLogger("eia")
     eia_root.addHandler(log_buffer)
+
+    # Pre-flight: resolve all LLM agents upfront so we fail fast
+    merged_models = {k: models.get(k) or DEFAULT_MODELS[k] for k, _ in AGENT_REGISTRY}
+    resolved_llms: dict[str, LLMProvider] = {}
+    try:
+        for agent_key, _ in AGENT_REGISTRY:
+            if agent_key not in NON_LLM_AGENTS:
+                resolved_llms[agent_key] = get_llm_for_model(merged_models[agent_key])
+    except (MissingAPIKeyError, UnknownModelError) as exc:
+        logger.error("[PIPELINE] Pre-flight validation failed: %s", exc)
+        yield _sse_event("pipeline_error", {
+            "msg": str(exc),
+            "type": type(exc).__name__,
+        })
+        eia_root.removeHandler(log_buffer)
+        return
 
     pipeline_status = {key: "pending" for key, _ in AGENT_REGISTRY}
     agent_steps = {key: [] for key, _ in AGENT_REGISTRY}
@@ -281,7 +317,7 @@ def stream_eia_pipeline(
     try:
         logger.info("[PIPELINE] Starting EIA pipeline — project: %r", project_name)
         logger.info("[PIPELINE] Coordinates: %s", coordinates)
-        logger.info("[PIPELINE] LLM provider: %s", llm.provider_name)
+        logger.info("[PIPELINE] Models: %s", merged_models)
         logger.info("[GRAPH] Compiled graph: %d nodes → %s",
                     len(AGENT_REGISTRY),
                     " → ".join(k for k, _ in AGENT_REGISTRY))
@@ -305,10 +341,12 @@ def stream_eia_pipeline(
                 })
                 return
 
-            if agent_key == "regulatory_screening":
-                agent = agent_class(screening_llm or llm, embedding_provider)
+            if agent_key in NON_LLM_AGENTS:
+                agent = agent_class()
+            elif agent_key == "regulatory_screening":
+                agent = agent_class(resolved_llms[agent_key], embedding_provider)
             else:
-                agent = agent_class(llm)
+                agent = agent_class(resolved_llms[agent_key])
             steps = AGENT_STEPS.get(agent_key, [])
 
             # ── Agent start ───────────────────────────────────────────────────
@@ -374,6 +412,22 @@ def stream_eia_pipeline(
                     "output": agent_output,
                 })
 
+                # Emit agent_cost event
+                usage = state.get("_usage", {}).get(agent_key, {})
+                agent_model = merged_models[agent_key]
+                agent_cost_usd = cost_usd(
+                    agent_model,
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                )
+                yield _sse_event("agent_cost", {
+                    "agent": agent_key,
+                    "model": agent_model,
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                    "cost_usd": agent_cost_usd,
+                })
+
             except Exception as exc:
                 logger.error("[GRAPH] Node %s raised: %s", agent_key, exc, exc_info=True)
                 for step_state in agent_steps[agent_key]:
@@ -391,6 +445,16 @@ def stream_eia_pipeline(
                     "error": str(exc),
                     "pipeline_status": dict(pipeline_status),
                     "steps": agent_steps[agent_key],
+                })
+
+                # Emit zero-cost event on error
+                agent_model = merged_models[agent_key]
+                yield _sse_event("agent_cost", {
+                    "agent": agent_key,
+                    "model": agent_model,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
                 })
 
         logger.info("[PIPELINE] All nodes complete — emitting result")
