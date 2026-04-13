@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import StreamingResponse
+from starlette.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -29,6 +29,7 @@ from db.regulatory_sources import (
     delete_source,
 )
 from services.regulatory_ingest import ingest_source_sync
+from services.export_report import generate_pdf, generate_latex
 from rag.regulatory.store import init_regulatory_table
 from rag.regulatory.embedder import detect_embedding_dimension
 
@@ -170,6 +171,32 @@ def run_pipeline(req: RunRequest):
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@app.post("/api/export/pdf")
+def export_pdf(data: dict):
+    try:
+        pdf_bytes = generate_pdf(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=EIA_Report.pdf"},
+    )
+
+
+@app.post("/api/export/latex")
+def export_latex(data: dict):
+    try:
+        tex_str = generate_latex(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return Response(
+        content=tex_str.encode("utf-8"),
+        media_type="application/x-latex",
+        headers={"Content-Disposition": "attachment; filename=EIA_Report.tex"},
     )
 
 

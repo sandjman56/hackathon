@@ -17,3 +17,4 @@ pymupdf>=1.24.0
 pymupdf4llm>=0.0.10
 tiktoken>=0.7.0
 click>=8.0.0
+fpdf2>=2.8.0
