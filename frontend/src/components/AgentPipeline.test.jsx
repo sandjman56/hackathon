@@ -67,15 +67,15 @@ describe('AgentPipeline model dropdowns', () => {
   it('renders select dropdowns for LLM agents', () => {
     render(<AgentPipeline {...extendedProps} />)
     const selects = screen.getAllByRole('combobox')
-    // project_parser and regulatory_screening are LLM agents
-    expect(selects.length).toBe(2)
+    // project_parser, regulatory_screening, and impact_analysis are LLM agents
+    expect(selects.length).toBe(3)
   })
 
   it('renders "no LLM" pill for non-LLM agents', () => {
     const { container } = render(<AgentPipeline {...extendedProps} />)
     const pills = container.querySelectorAll('span')
     const noLlmPills = Array.from(pills).filter((s) => s.textContent === 'no LLM')
-    expect(noLlmPills.length).toBe(3)
+    expect(noLlmPills.length).toBe(2)
   })
 })
 
@@ -110,5 +110,68 @@ describe('AgentPipeline cost chips', () => {
     render(<AgentPipeline {...props} />)
     expect(screen.getByText(/TOTAL/)).toBeInTheDocument()
     expect(screen.getByText('$0.0040')).toBeInTheDocument()
+  })
+})
+
+describe('AgentPipeline impact matrix dropdown', () => {
+  it('renders impact cells when impact_analysis card is clicked', () => {
+    const impactMatrix = {
+      actions: ['land clearing', 'construction'],
+      categories: ['wetlands'],
+      cells: [
+        {
+          action: 'land clearing',
+          category: 'wetlands',
+          framework: 'Clean Water Act',
+          determination: {
+            significance: 'significant',
+            confidence: 0.85,
+            reasoning: 'Direct wetland fill impact',
+            mitigation: ['avoidance', 'compensatory'],
+            needs_review: false,
+          },
+        },
+        {
+          action: 'construction',
+          category: 'wetlands',
+          framework: 'Clean Water Act',
+          determination: {
+            significance: 'moderate',
+            confidence: 0.72,
+            reasoning: 'Runoff during construction phase',
+            mitigation: ['minimization'],
+            needs_review: false,
+          },
+        },
+      ],
+      rag_fallbacks: [],
+    }
+
+    const props = {
+      ...extendedProps,
+      pipelineState: { ...extendedProps.pipelineState, impact_analysis: 'complete' },
+      agentOutputs: { impact_analysis: impactMatrix },
+    }
+    render(<AgentPipeline {...props} />)
+
+    // Click the impact analysis card to open dropdown
+    fireEvent.click(screen.getByText('IMPACT ANALYSIS'))
+
+    // Verify cell data renders
+    expect(screen.getByText('wetlands')).toBeInTheDocument()
+    expect(screen.getByText('significant')).toBeInTheDocument()
+    expect(screen.getByText('85%')).toBeInTheDocument()
+    expect(screen.getByText('Direct wetland fill impact')).toBeInTheDocument()
+  })
+
+  it('shows empty message when impact matrix has no cells', () => {
+    const props = {
+      ...extendedProps,
+      pipelineState: { ...extendedProps.pipelineState, impact_analysis: 'complete' },
+      agentOutputs: { impact_analysis: { actions: [], categories: [], cells: [], rag_fallbacks: [] } },
+    }
+    render(<AgentPipeline {...props} />)
+    fireEvent.click(screen.getByText('IMPACT ANALYSIS'))
+    expect(screen.getByText('No impact data')).toBeInTheDocument()
   })
 })

@@ -182,8 +182,9 @@ function renderRegulations(regs) {
 }
 
 function renderImpactMatrix(matrix) {
-  if (!Array.isArray(matrix) || matrix.length === 0) {
-    return <Empty msg="No impact matrix generated (LLM stub)" />
+  const cells = matrix?.cells
+  if (!Array.isArray(cells) || cells.length === 0) {
+    return <Empty msg="No impact data" />
   }
   const sigColor = {
     significant: 'var(--red-alert)',
@@ -191,15 +192,42 @@ function renderImpactMatrix(matrix) {
     minimal: 'var(--green-primary)',
     none: 'var(--text-muted)',
   }
+  // Group cells by category for readability
+  const byCategory = {}
+  for (const cell of cells) {
+    if (!byCategory[cell.category]) byCategory[cell.category] = []
+    byCategory[cell.category].push(cell)
+  }
   return (
     <div style={s.outputBody}>
-      {matrix.map((row, i) => (
-        <div key={i} style={s.matrixRow}>
-          <span style={s.matrixCategory}>{row.category}</span>
-          <span style={{ ...s.matrixSig, color: sigColor[row.significance] || 'var(--text-muted)' }}>
-            {row.significance}
-          </span>
-          {row.notes && <div style={s.matrixNotes}>{row.notes}</div>}
+      {Object.entries(byCategory).map(([category, catCells]) => (
+        <div key={category}>
+          <SectionTitle>{category.replace(/_/g, ' ')}</SectionTitle>
+          {catCells.map((cell, i) => {
+            const det = cell.determination || {}
+            return (
+              <div key={i} style={s.impactCell}>
+                <div style={s.impactCellHeader}>
+                  <span style={s.impactAction}>{cell.action}</span>
+                  <span style={{ ...s.matrixSig, color: sigColor[det.significance] || 'var(--text-muted)' }}>
+                    {det.significance}
+                  </span>
+                  <span style={s.impactConf}>
+                    {Math.round((det.confidence || 0) * 100)}%
+                  </span>
+                  {det.needs_review && (
+                    <span style={s.reviewFlag} title="Flagged for human review">⚠</span>
+                  )}
+                </div>
+                {det.mitigation?.length > 0 && (
+                  <div style={s.impactMitigation}>{det.mitigation.join(', ')}</div>
+                )}
+                {det.reasoning && (
+                  <div style={s.impactReasoning}>{det.reasoning}</div>
+                )}
+              </div>
+            )
+          })}
         </div>
       ))}
     </div>
@@ -549,6 +577,46 @@ const s = {
     color: 'var(--text-muted)',
     width: '100%',
     marginTop: '2px',
+  },
+  impactCell: {
+    padding: '4px 0',
+    borderBottom: '1px solid var(--border)',
+  },
+  impactCellHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+  },
+  impactAction: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: 'var(--text-secondary)',
+    flex: 1,
+  },
+  impactConf: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    flexShrink: 0,
+  },
+  reviewFlag: {
+    fontSize: '11px',
+    flexShrink: 0,
+  },
+  impactMitigation: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '9px',
+    color: 'var(--text-muted)',
+    paddingLeft: '8px',
+    marginTop: '2px',
+  },
+  impactReasoning: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: 'var(--text-secondary)',
+    paddingLeft: '8px',
+    marginTop: '2px',
+    lineHeight: 1.4,
   },
   reportText: {
     padding: '12px 14px',
