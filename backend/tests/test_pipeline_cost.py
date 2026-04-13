@@ -65,11 +65,22 @@ class _FakeRegScreening:
 
 
 class _FakeImpact:
-    def __init__(self):
-        pass
+    def __init__(self, llm):
+        self.llm = llm
 
     def run(self, state):
-        state["impact_matrix"] = []
+        result = self.llm.complete("test")
+        state["impact_matrix"] = {
+            "actions": [],
+            "categories": [],
+            "cells": [],
+            "rag_fallbacks": [],
+        }
+        state.setdefault("_usage", {})["impact_analysis"] = {
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "model": result.model,
+        }
         return state
 
 
@@ -160,10 +171,19 @@ def test_llm_agents_have_nonzero_cost():
 def test_non_llm_agents_have_zero_cost():
     parsed = _run_pipeline()
     cost_events = {d["agent"]: d for t, d in parsed if t == "agent_cost"}
-    for agent in ("environmental_data", "impact_analysis", "report_synthesis"):
+    for agent in ("environmental_data", "report_synthesis"):
         assert cost_events[agent]["input_tokens"] == 0
         assert cost_events[agent]["output_tokens"] == 0
         assert cost_events[agent]["cost_usd"] == 0.0
+
+
+def test_impact_analysis_has_nonzero_cost():
+    parsed = _run_pipeline()
+    cost_events = {d["agent"]: d for t, d in parsed if t == "agent_cost"}
+    ia = cost_events["impact_analysis"]
+    assert ia["input_tokens"] == 100
+    assert ia["output_tokens"] == 50
+    assert ia["cost_usd"] > 0
 
 
 def test_cost_after_complete():
