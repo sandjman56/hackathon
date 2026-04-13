@@ -105,6 +105,26 @@ async def lifespan(app: FastAPI):
         print(f"[LIFESPAN] regulatory_chunks init failed: {exc}",
               flush=True, file=sys.stdout)
 
+    try:
+        _conn2 = _get_connection()
+        with _conn2.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS evaluations (
+                    id SERIAL PRIMARY KEY,
+                    filename TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    blob BYTEA NOT NULL,
+                    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+        _conn2.commit()
+        _conn2.close()
+        print("[LIFESPAN] evaluations table ready", flush=True, file=sys.stdout)
+    except Exception as exc:
+        print(f"[LIFESPAN] evaluations table init failed: {exc}",
+              flush=True, file=sys.stdout)
+
     yield
 
 
@@ -388,6 +408,98 @@ def delete_regulatory_source(source_id: str):
         deleted_chunks = cascade_delete_chunks(conn, source_id)
         delete_source(conn, source_id)
         return {"deleted_chunks": deleted_chunks}
+    finally:
+        conn.close()
+
+
+# --- Evaluations (EIS document uploads) ------------------------------------
+
+@app.get("/api/evaluations")
+def list_evaluations():
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, filename, sha256, size_bytes, uploaded_at "
+            "FROM evaluations ORDER BY uploaded_at DESC"
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return {
+            "documents": [
+                {
+                    "id": r[0],
+                    "filename": r[1],
+                    "sha256": r[2],
+                    "size_bytes": r[3],
+                    "uploaded_at": r[4].isoformat(),
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/evaluations", status_code=201)
+async def upload_evaluation(file: UploadFile = File(...)):
+    if file.content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
+        raise HTTPException(status_code=400, detail="file must be a PDF")
+
+    buf = bytearray()
+    _CHUNK = 1 << 20
+    while True:
+        piece = await file.read(_CHUNK)
+        if not piece:
+            break
+        buf.extend(piece)
+        if len(buf) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"file too large (>{_MAX_UPLOAD_BYTES} bytes)",
+            )
+    blob = bytes(buf)
+    if len(blob) == 0:
+        raise HTTPException(status_code=400, detail="empty file")
+    if not blob.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="not a valid PDF")
+
+    sha = hashlib.sha256(blob).hexdigest()
+    fname = file.filename or "upload.pdf"
+
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO evaluations (filename, sha256, size_bytes, blob) "
+            "VALUES (%s, %s, %s, %s) RETURNING id, uploaded_at",
+            (fname, sha, len(blob), blob),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        return {
+            "id": row[0],
+            "filename": fname,
+            "sha256": sha,
+            "size_bytes": len(blob),
+            "uploaded_at": row[1].isoformat(),
+        }
+    finally:
+        conn.close()
+
+
+@app.delete("/api/evaluations/{eval_id}", status_code=204)
+def delete_evaluation(eval_id: int):
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM evaluations WHERE id = %s", (eval_id,))
+        if cur.rowcount == 0:
+            cur.close()
+            raise HTTPException(status_code=404, detail="evaluation not found")
+        conn.commit()
+        cur.close()
     finally:
         conn.close()
 
