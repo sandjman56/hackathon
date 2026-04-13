@@ -57,10 +57,33 @@ class _SSELogBuffer(logging.Handler):
 
 # ── State schema ──────────────────────────────────────────────────────────────
 
-class ImpactRow(TypedDict):
+class ImpactDetermination(TypedDict):
+    significance: str   # "significant" | "moderate" | "minimal" | "none"
+    confidence: float   # 0.0 – 1.0
+    reasoning: str      # why this determination was made
+    mitigation: list    # applicable: "avoidance", "minimization", "compensatory"
+    needs_review: bool  # True when confidence < 0.6
+
+
+class ImpactCell(TypedDict):
+    action: str         # project action/component (column)
+    category: str       # environmental resource category (row)
+    framework: str      # regulatory framework governing this evaluation
+    determination: ImpactDetermination
+
+
+class RAGFallback(TypedDict):
+    action: str
     category: str
-    significance: str  # "significant" | "moderate" | "minimal" | "none"
-    notes: str
+    query: str
+    reason: str
+
+
+class ImpactMatrixOutput(TypedDict):
+    actions: list       # distinct project actions (column headers)
+    categories: list    # distinct resource categories (row headers)
+    cells: list         # list of ImpactCell dicts
+    rag_fallbacks: list # list of RAGFallback dicts (empty for v1)
 
 
 class Regulation(TypedDict):
@@ -83,7 +106,7 @@ class EIAPipelineState(TypedDict):
     parsed_project: dict
     environmental_data: dict
     regulations: list[Regulation]
-    impact_matrix: list[ImpactRow]
+    impact_matrix: dict  # ImpactMatrixOutput
     report: str
 
 
@@ -116,9 +139,9 @@ AGENT_STEPS = {
         {"name": "screen_applicability", "label": "Screening regulatory applicability"},
     ],
     "impact_analysis": [
-        {"name": "analyze_categories", "label": "Analyzing impact categories"},
-        {"name": "score_significance", "label": "Scoring significance levels"},
-        {"name": "generate_matrix", "label": "Generating impact matrix"},
+        {"name": "build_context", "label": "Building impact context from upstream data"},
+        {"name": "evaluate_determinations", "label": "Evaluating impact determinations (LLM)"},
+        {"name": "validate_matrix", "label": "Validating matrix and flagging low confidence"},
     ],
     "report_synthesis": [
         {"name": "compile_findings", "label": "Compiling findings"},
@@ -147,13 +170,12 @@ DEFAULT_MODELS: dict[str, str] = {
     "project_parser":       "gemini-2.5-flash",
     "environmental_data":   "gemini-2.5-flash",   # not used (non-LLM agent)
     "regulatory_screening": "claude-haiku-4-5-20251001",
-    "impact_analysis":      "gemini-2.5-flash",   # not used (stub)
+    "impact_analysis":      "gemini-2.5-flash",
     "report_synthesis":     "gemini-2.5-flash",   # not used (stub)
 }
 
 NON_LLM_AGENTS = frozenset({
     "environmental_data",
-    "impact_analysis",
     "report_synthesis",
 })
 
@@ -233,7 +255,7 @@ def run_eia_pipeline(
         "parsed_project": {},
         "environmental_data": {},
         "regulations": [],
-        "impact_matrix": [],
+        "impact_matrix": {},
         "report": "",
         "errors": {},
     }
@@ -243,7 +265,7 @@ def run_eia_pipeline(
         "coordinates": final_state["coordinates"],
         "description": final_state["description"],
         "pipeline_status": final_state["pipeline_status"],
-        "impact_matrix": final_state.get("impact_matrix", []),
+        "impact_matrix": final_state.get("impact_matrix", {}),
         "regulations": final_state.get("regulations", []),
     }
 
@@ -304,7 +326,7 @@ def stream_eia_pipeline(
         "parsed_project": {},
         "environmental_data": {},
         "regulations": [],
-        "impact_matrix": [],
+        "impact_matrix": {},
         "report": "",
         "errors": errors,
     }
@@ -465,7 +487,7 @@ def stream_eia_pipeline(
             "coordinates": state["coordinates"],
             "description": state["description"],
             "pipeline_status": dict(pipeline_status),
-            "impact_matrix": state.get("impact_matrix", []),
+            "impact_matrix": state.get("impact_matrix", {}),
             "regulations": state.get("regulations", []),
             "errors": errors if errors else None,
         })
