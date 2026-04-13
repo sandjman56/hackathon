@@ -247,8 +247,7 @@ class TestReportSynthesisHappyPath(unittest.TestCase):
     """Full pipeline with mock LLM and realistic Pittsburgh highway data."""
 
     def setUp(self):
-        self.agent = ReportSynthesisAgent()
-        self.agent.llm = make_llm()
+        self.agent = ReportSynthesisAgent(make_llm())
         result = self.agent.run(dict(SAMPLE_STATE))
         self.report = result["report"]
 
@@ -306,8 +305,7 @@ class TestReportSynthesisHappyPath(unittest.TestCase):
         self.assertTrue(meta["total_tokens_used"] > 0)
 
     def test_usage_tracked_in_state(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         result = agent.run(dict(SAMPLE_STATE))
         usage = result.get("_usage", {}).get("report_synthesis")
         self.assertIsNotNone(usage)
@@ -320,8 +318,7 @@ class TestDisclaimerAndConfidence(unittest.TestCase):
     """Verify confidence thresholding and disclaimer generation."""
 
     def setUp(self):
-        self.agent = ReportSynthesisAgent()
-        self.agent.llm = make_llm()
+        self.agent = ReportSynthesisAgent(make_llm())
         result = self.agent.run(dict(SAMPLE_STATE))
         self.report_data = result["report"]["reports"][0]
 
@@ -362,8 +359,7 @@ class TestDegradedState(unittest.TestCase):
     """Test with missing API data and sparse regulations."""
 
     def setUp(self):
-        self.agent = ReportSynthesisAgent()
-        self.agent.llm = make_llm()
+        self.agent = ReportSynthesisAgent(make_llm())
         result = self.agent.run(dict(DEGRADED_STATE))
         self.report_data = result["report"]["reports"][0]
 
@@ -389,33 +385,6 @@ class TestDegradedState(unittest.TestCase):
         self.assertEqual(len(table["cells"]), 1)
 
 
-class TestNoLLMFallback(unittest.TestCase):
-    """Test behavior when LLM provider is unavailable."""
-
-    def setUp(self):
-        self.agent = ReportSynthesisAgent()
-        self.agent.llm = None  # No LLM
-        result = self.agent.run(dict(SAMPLE_STATE))
-        self.report = result["report"]
-
-    def test_report_generates_without_llm(self):
-        self.assertEqual(self.report["stage"], "complete")
-
-    def test_narrative_sections_show_placeholder(self):
-        for section in self.report["reports"][0]["sections"]:
-            if section["requires_llm"]:
-                self.assertIn("LLM unavailable", section["content"])
-
-    def test_static_sections_still_render(self):
-        title = self.report["reports"][0]["sections"][0]
-        self.assertIn("Mon Valley", title["content"])
-
-    def test_zero_llm_calls(self):
-        meta = self.report["reports"][0]["metadata"]
-        self.assertEqual(meta["total_llm_calls"], 0)
-        self.assertEqual(meta["total_tokens_used"], 0)
-
-
 class TestLLMError(unittest.TestCase):
     """Test behavior when LLM calls raise exceptions."""
 
@@ -424,8 +393,7 @@ class TestLLMError(unittest.TestCase):
         llm.provider_name = "mock"
         llm.complete.side_effect = RuntimeError("API timeout")
 
-        agent = ReportSynthesisAgent()
-        agent.llm = llm
+        agent = ReportSynthesisAgent(llm)
         result = agent.run(dict(SAMPLE_STATE))
         report = result["report"]
 
@@ -439,8 +407,7 @@ class TestMatrixTableRendering(unittest.TestCase):
     """Verify the static matrix table section renders correctly."""
 
     def setUp(self):
-        self.agent = ReportSynthesisAgent()
-        self.agent.llm = make_llm()
+        self.agent = ReportSynthesisAgent(make_llm())
         result = self.agent.run(dict(SAMPLE_STATE))
         self.matrix_section = [
             s for s in result["report"]["reports"][0]["sections"]
@@ -467,8 +434,7 @@ class TestMitigationSection(unittest.TestCase):
     """Verify mitigation section only appears when mitigation exists."""
 
     def test_mitigation_llm_called_when_data_exists(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         agent.run(dict(SAMPLE_STATE))
         # Section 7 (mitigation) should trigger an LLM call since
         # SAMPLE_STATE has cells with mitigation
@@ -494,8 +460,7 @@ class TestMitigationSection(unittest.TestCase):
             }],
             "rag_fallbacks": [],
         }
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         agent.run(state)
         # 5 LLM calls instead of 6 — mitigation prompt is empty so skipped
         self.assertEqual(agent._total_llm_calls, 5)
@@ -505,8 +470,7 @@ class TestMissingUpstreamData(unittest.TestCase):
     """Test with completely missing upstream agent outputs."""
 
     def test_empty_state(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         state = {
             "project_name": "Empty",
             "coordinates": "",
@@ -518,8 +482,7 @@ class TestMissingUpstreamData(unittest.TestCase):
         self.assertEqual(len(report["reports"][0]["sections"]), 11)
 
     def test_none_values_in_state(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         state = {
             "project_name": "None Test",
             "coordinates": "",
@@ -559,29 +522,25 @@ class TestConfidenceThreshold(unittest.TestCase):
         return state
 
     def test_confidence_0_4_flagged(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         result = agent.run(self._make_state_with_confidence(0.4))
         items = result["report"]["reports"][0]["disclaimer_items"]
         self.assertEqual(len(items), 1)
 
     def test_confidence_0_59_flagged(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         result = agent.run(self._make_state_with_confidence(0.59))
         items = result["report"]["reports"][0]["disclaimer_items"]
         self.assertEqual(len(items), 1)
 
     def test_confidence_0_6_not_flagged(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         result = agent.run(self._make_state_with_confidence(0.6))
         items = result["report"]["reports"][0]["disclaimer_items"]
         self.assertEqual(len(items), 0)
 
     def test_confidence_0_95_not_flagged(self):
-        agent = ReportSynthesisAgent()
-        agent.llm = make_llm()
+        agent = ReportSynthesisAgent(make_llm())
         result = agent.run(self._make_state_with_confidence(0.95))
         items = result["report"]["reports"][0]["disclaimer_items"]
         self.assertEqual(len(items), 0)

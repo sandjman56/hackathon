@@ -171,12 +171,11 @@ DEFAULT_MODELS: dict[str, str] = {
     "environmental_data":   "gemini-2.5-flash",   # not used (non-LLM agent)
     "regulatory_screening": "claude-haiku-4-5-20251001",
     "impact_analysis":      "gemini-2.5-flash",
-    "report_synthesis":     "gemini-2.5-flash",   # not used (stub)
+    "report_synthesis":     "gemini-2.5-flash",
 }
 
 NON_LLM_AGENTS = frozenset({
     "environmental_data",
-    "report_synthesis",
 })
 
 
@@ -489,6 +488,7 @@ def stream_eia_pipeline(
             "pipeline_status": dict(pipeline_status),
             "impact_matrix": state.get("impact_matrix", {}),
             "regulations": state.get("regulations", []),
+            "report": state.get("report", {}),
             "errors": errors if errors else None,
         })
 
