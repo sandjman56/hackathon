@@ -4,6 +4,7 @@ import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
 import BrainScanner from './components/BrainScanner.jsx'
 import DatabaseView from './components/DatabaseView.jsx'
+import EvaluationsView from './components/EvaluationsView.jsx'
 import useModelSelections from './hooks/useModelSelections.js'
 
 const AGENTS = [
@@ -80,7 +81,13 @@ function App() {
         </div>
         <div style={styles.headerRight}>
           <button
-            style={styles.dbBtn}
+            style={view === 'evaluations' ? { ...styles.dbBtn, background: 'var(--green-dim)' } : styles.dbBtn}
+            onClick={() => setView(view === 'evaluations' ? 'main' : 'evaluations')}
+          >
+            EVALUATIONS
+          </button>
+          <button
+            style={view === 'db' ? { ...styles.dbBtn, background: 'var(--green-dim)' } : styles.dbBtn}
             onClick={() => setView(view === 'db' ? 'main' : 'db')}
           >
             VIEW DB
@@ -91,6 +98,8 @@ function App() {
 
       {view === 'db' ? (
         <DatabaseView onBack={() => setView('main')} />
+      ) : view === 'evaluations' ? (
+        <EvaluationsView onBack={() => setView('main')} />
       ) : (
         <div style={styles.main}>
           {/* Left: project form */}
