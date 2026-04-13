@@ -12,6 +12,8 @@ import time
 import uuid
 from typing import Any
 
+import pymupdf
+
 from db.regulatory_sources import (
     cascade_delete_chunks,
     get_source_bytes,
@@ -21,6 +23,7 @@ from db.regulatory_sources import (
 from rag.regulatory.chunker import chunk_sections
 from rag.regulatory.embedder import detect_embedding_dimension, embed_chunks
 from rag.regulatory.parser import parse_pdf
+from rag.regulatory.parser_pa_code import parse_pa_code_pdf
 from rag.regulatory.store import (
     build_metadata,
     init_regulatory_table,
@@ -32,6 +35,25 @@ logger = logging.getLogger("eia.rag.regulatory.sources")
 # Throttle progress writes so we don't hammer the DB on small chunks.
 _PROGRESS_MIN_INTERVAL_S = 1.0
 _PROGRESS_MIN_DELTA = 5
+
+
+def detect_parser(blob: bytes) -> str:
+    """Sniff the first page of a PDF to pick the right parser.
+
+    Returns:
+        ``"pa_code"`` for PA Code browser-printed PDFs,
+        ``"federal"`` for NEPA/CFR-style scanned reprints.
+    """
+    try:
+        doc = pymupdf.open(stream=blob, filetype="pdf")
+        first_page_text = doc[0].get_text("text") if len(doc) > 0 else ""
+        doc.close()
+    except Exception:
+        return "federal"
+
+    if "Pennsylvania Code" in first_page_text:
+        return "pa_code"
+    return "federal"
 
 
 def ingest_source_sync(
@@ -61,10 +83,14 @@ def ingest_source_sync(
         if blob is None:
             raise RuntimeError(f"source row not found: {source_id}")
 
-        log("parse_pdf begin: %d bytes", len(blob))
+        parser_type = detect_parser(blob)
+        log("detected parser: %s, %d bytes", parser_type, len(blob))
         t0 = time.time()
-        sections, parser_warnings = parse_pdf(blob)
-        log("parse_pdf done: %d sections, %d warnings in %.2fs",
+        if parser_type == "pa_code":
+            sections, parser_warnings = parse_pa_code_pdf(blob)
+        else:
+            sections, parser_warnings = parse_pdf(blob)
+        log("parse done: %d sections, %d warnings in %.2fs",
             len(sections), len(parser_warnings), time.time() - t0)
 
         if not sections:
@@ -72,9 +98,8 @@ def ingest_source_sync(
             update_status(
                 conn, source_id, status="failed",
                 status_message=(
-                    "Not a NEPA-style PDF (no CFR sections detected). "
-                    "Only documents structured like 40 CFR 1500-1508 "
-                    "can be ingested."
+                    f"No sections detected by {parser_type} parser. "
+                    "The PDF may not match any supported regulatory format."
                 ),
             )
             return

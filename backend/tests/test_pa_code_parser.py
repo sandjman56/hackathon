@@ -403,5 +403,33 @@ class TestPaCodeMetadata(unittest.TestCase):
         self.assertIn("jurisdiction", _ALLOWED_FILTER_KEYS)
 
 
+# --- parser auto-detect ---------------------------------------------------
+
+from services.regulatory_ingest import detect_parser  # noqa: E402
+
+
+class TestParserAutoDetect(unittest.TestCase):
+
+    def _make_pdf(self, text: str) -> bytes:
+        doc = pymupdf.open()
+        page = doc.new_page(width=612, height=792)
+        page.insert_text((72, 72), text, fontsize=10)
+        blob = doc.tobytes()
+        doc.close()
+        return blob
+
+    def test_detects_pa_code(self):
+        blob = self._make_pdf("Pennsylvania Code\nCHAPTER 105. DAM SAFETY")
+        self.assertEqual(detect_parser(blob), "pa_code")
+
+    def test_detects_federal(self):
+        blob = self._make_pdf("PART 1501—NEPA AND AGENCY PLANNING")
+        self.assertEqual(detect_parser(blob), "federal")
+
+    def test_defaults_to_federal(self):
+        blob = self._make_pdf("Some random text with no clear markers.")
+        self.assertEqual(detect_parser(blob), "federal")
+
+
 if __name__ == "__main__":
     unittest.main()
