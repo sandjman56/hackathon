@@ -40,6 +40,27 @@ def init_db():
                 saved_at TIMESTAMPTZ DEFAULT NOW()
             );
         """)
+        # Agent output tables — one per pipeline agent
+        for table_name in (
+            "project_parser_outputs",
+            "environmental_data_outputs",
+            "regulatory_screening_outputs",
+            "impact_analysis_outputs",
+            "report_synthesis_outputs",
+        ):
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    id SERIAL PRIMARY KEY,
+                    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    output JSONB NOT NULL,
+                    model TEXT,
+                    input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    cost_usd NUMERIC(10,6),
+                    saved_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (project_id)
+                );
+            """)
         conn.commit()
         cur.close()
         conn.close()
