@@ -19,6 +19,7 @@ from fastapi import BackgroundTasks, File, Form, UploadFile
 
 from llm.provider_factory import get_embedding_provider
 from pipeline import stream_eia_pipeline, cancel_pipeline
+import psycopg2.extras
 from db.vector_store import init_db, _get_connection
 from db.regulatory_sources import (
     init_regulatory_sources_table,
@@ -206,6 +207,20 @@ class SaveProjectRequest(BaseModel):
     description: str
 
 
+AGENT_OUTPUT_TABLES = {
+    "project_parser": "project_parser_outputs",
+    "environmental_data": "environmental_data_outputs",
+    "regulatory_screening": "regulatory_screening_outputs",
+    "impact_analysis": "impact_analysis_outputs",
+    "report_synthesis": "report_synthesis_outputs",
+}
+
+
+class SaveOutputsRequest(BaseModel):
+    agent_outputs: dict
+    agent_costs: dict = Field(default_factory=dict)
+
+
 @app.get("/api/projects")
 def list_projects():
     conn = _get_connection()
@@ -261,6 +276,49 @@ def delete_project(project_id: int):
     conn.commit()
     cur.close()
     conn.close()
+
+
+@app.post("/api/projects/{project_id}/outputs")
+def save_project_outputs(project_id: int, req: SaveOutputsRequest):
+    conn = _get_connection()
+    cur = conn.cursor()
+    try:
+        # Verify project exists
+        cur.execute("SELECT id FROM projects WHERE id = %s", (project_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Project not found. Save the project first.")
+
+        for agent_key, table_name in AGENT_OUTPUT_TABLES.items():
+            output = req.agent_outputs.get(agent_key)
+            if output is None:
+                continue
+            cost = req.agent_costs.get(agent_key) or {}
+            cur.execute(
+                f"""
+                INSERT INTO {table_name} (project_id, output, model, input_tokens, output_tokens, cost_usd)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (project_id) DO UPDATE SET
+                    output = EXCLUDED.output,
+                    model = EXCLUDED.model,
+                    input_tokens = EXCLUDED.input_tokens,
+                    output_tokens = EXCLUDED.output_tokens,
+                    cost_usd = EXCLUDED.cost_usd,
+                    saved_at = NOW()
+                """,
+                (
+                    project_id,
+                    psycopg2.extras.Json(output),
+                    cost.get("model"),
+                    cost.get("input_tokens"),
+                    cost.get("output_tokens"),
+                    cost.get("cost_usd"),
+                ),
+            )
+        conn.commit()
+        return {"saved": True, "project_id": project_id}
+    finally:
+        cur.close()
+        conn.close()
 
 
 # --- Regulatory sources (DB-backed uploads + ingestion) -------------------
