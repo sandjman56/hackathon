@@ -403,6 +403,45 @@ class TestPaCodeMetadata(unittest.TestCase):
         self.assertIn("jurisdiction", _ALLOWED_FILTER_KEYS)
 
 
+# --- E2E pipeline smoke test ----------------------------------------------
+
+
+class TestPaCodePipelineSmoke(unittest.TestCase):
+    """Full parse -> chunk -> breadcrumb pipeline for the real PA Code PDF."""
+
+    @unittest.skipUnless(PA_CODE_PDF.exists(), "PA Code PDF not present")
+    def test_full_pipeline(self):
+        from rag.regulatory.chunker import chunk_sections
+        from rag.regulatory.breadcrumbs import build_breadcrumb
+
+        blob = PA_CODE_PDF.read_bytes()
+        sections, warnings = parse_pa_code_pdf(blob)
+
+        chunks = chunk_sections(sections)
+        self.assertGreater(len(chunks), 50, "expected at least 50 chunks")
+
+        # Every chunk should produce a valid breadcrumb
+        for chunk in chunks:
+            bc = build_breadcrumb(chunk)
+            self.assertIn("Title 25", bc)
+            self.assertIn("Chapter 105", bc)
+            self.assertTrue(len(bc) > 20, f"breadcrumb too short: {bc}")
+
+        # Spot check: § 105.17 (Wetlands) should be present
+        wetland_chunks = [
+            c for c in chunks
+            if any(s.section == "105.17" for s in c.sources)
+        ]
+        self.assertGreater(len(wetland_chunks), 0, "§ 105.17 Wetlands not found")
+
+        # Spot check: § 105.18a (Permitting in wetlands) should be present
+        permit_chunks = [
+            c for c in chunks
+            if any(s.section == "105.18a" for s in c.sources)
+        ]
+        self.assertGreater(len(permit_chunks), 0, "§ 105.18a not found")
+
+
 # --- parser auto-detect ---------------------------------------------------
 
 from services.regulatory_ingest import detect_parser  # noqa: E402
