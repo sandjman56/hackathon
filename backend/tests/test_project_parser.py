@@ -132,5 +132,49 @@ class TestProjectParserOutputTypes(unittest.TestCase):
         self.assertIsInstance(pp["location"], str)
 
 
+class TestProjectParserActions(unittest.TestCase):
+    RESPONSE_WITH_ACTIONS = json.dumps({
+        "project_type": "solar farm",
+        "scale": "50 MW",
+        "location": "Pittsburgh, PA",
+        "actions": [
+            "site clearing and grading",
+            "solar panel installation",
+            "access road construction",
+            "electrical interconnection",
+        ],
+    })
+
+    def setUp(self):
+        self.agent = ProjectParserAgent(make_llm(self.RESPONSE_WITH_ACTIONS))
+        self.result = self.agent.run(dict(BASE_STATE))
+
+    def test_actions_key_present(self):
+        self.assertIn("actions", self.result["parsed_project"])
+
+    def test_actions_is_list(self):
+        self.assertIsInstance(self.result["parsed_project"]["actions"], list)
+
+    def test_actions_count(self):
+        self.assertEqual(len(self.result["parsed_project"]["actions"]), 4)
+
+    def test_actions_are_strings(self):
+        for action in self.result["parsed_project"]["actions"]:
+            self.assertIsInstance(action, str)
+
+    def test_fallback_actions_when_missing(self):
+        """LLM returns valid JSON but no actions key → defaults to empty list."""
+        no_actions = json.dumps({"project_type": "pipeline", "scale": "10mi", "location": "PA"})
+        agent = ProjectParserAgent(make_llm(no_actions))
+        result = agent.run(dict(BASE_STATE))
+        self.assertEqual(result["parsed_project"]["actions"], [])
+
+    def test_fallback_actions_on_bad_json(self):
+        """Total parse failure → fallback includes empty actions."""
+        agent = ProjectParserAgent(make_llm("not json"))
+        result = agent.run(dict(BASE_STATE))
+        self.assertEqual(result["parsed_project"]["actions"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

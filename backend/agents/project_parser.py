@@ -21,9 +21,10 @@ Extract the following fields and return them as a JSON object:
 - project_type  (string): the category of project, e.g. "solar farm", "highway expansion", "warehouse", "pipeline", etc.
 - scale         (string): size or scope, e.g. "5 MW", "12 miles", "200,000 sq ft", "unknown"
 - location      (string): human-readable place name inferred from the description or coordinates
+- actions       (list of strings): discrete physical activities the project involves, e.g. ["site clearing and grading", "building construction", "utility trenching", "road paving"]. List 3-8 specific actions.
 
 Return exactly this structure:
-{{"project_type": "...", "scale": "...", "location": "..."}}
+{{"project_type": "...", "scale": "...", "location": "...", "actions": ["...", "..."]}}
 """
 
 
@@ -59,10 +60,14 @@ class ProjectParserAgent:
             parsed = json.loads(clean)
 
             # Normalise to expected keys with safe defaults
+            raw_actions = parsed.get("actions", [])
+            if not isinstance(raw_actions, list):
+                raw_actions = []
             result = {
                 "project_type": str(parsed.get("project_type", "unknown")),
                 "scale":        str(parsed.get("scale", "unknown")),
                 "location":     str(parsed.get("location", coordinates or "unknown")),
+                "actions":      [str(a) for a in raw_actions if a],
             }
             logger.info("[ProjectParser] Parsed: %s", result)
 
@@ -72,6 +77,7 @@ class ProjectParserAgent:
                 "project_type": "unknown",
                 "scale": "unknown",
                 "location": coordinates or "unknown",
+                "actions": [],
             }
 
         if llm_result:
