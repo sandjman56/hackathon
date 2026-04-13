@@ -369,5 +369,39 @@ class TestStateCodeBreadcrumbs(unittest.TestCase):
         self.assertIn("[DEFINITION]", bc)
 
 
+# --- store metadata -------------------------------------------------------
+
+from rag.regulatory.store import build_metadata, _ALLOWED_FILTER_KEYS  # noqa: E402
+
+
+class TestPaCodeMetadata(unittest.TestCase):
+
+    def _make_pa_chunk(self):
+        raw = RawSection(
+            document_type=DocumentType.STATE_CODE,
+            section="105.14", title="Review of applications",
+            body="Applications shall be reviewed.",
+            citation="25 Pa. Code § 105.14",
+            pages=[10], part="A", part_title="General Provisions",
+        )
+        return Chunk(sources=[raw], body=raw.body, token_count=8)
+
+    def test_state_code_metadata_fields(self):
+        chunk = self._make_pa_chunk()
+        meta = build_metadata(
+            chunk, breadcrumb="test breadcrumb",
+            source="PA_25_Chapter105", source_file="PA-25-Chapter105.pdf",
+            source_id="abc-123", is_current=True,
+        )
+        self.assertEqual(meta["document_type"], "state_code")
+        self.assertEqual(meta["agency"], "PA DEP")
+        self.assertEqual(meta["jurisdiction"], "Pennsylvania")
+        self.assertEqual(meta["statute"], "PA Code")
+        self.assertIn("pacodeandbulletin.gov", meta["url"])
+
+    def test_jurisdiction_is_allowed_filter_key(self):
+        self.assertIn("jurisdiction", _ALLOWED_FILTER_KEYS)
+
+
 if __name__ == "__main__":
     unittest.main()
