@@ -1,6 +1,5 @@
 const NON_LLM_AGENTS = new Set([
   'environmental_data',
-  'report_synthesis',
 ])
 
 export { NON_LLM_AGENTS }

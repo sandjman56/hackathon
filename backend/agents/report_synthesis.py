@@ -6,7 +6,6 @@ Environmental Assessment document with LLM-generated narrative sections,
 inline confidence highlighting, and a structured disclaimer.
 """
 
-import json
 import logging
 import re
 import time
@@ -14,7 +13,6 @@ import uuid
 from datetime import datetime, timezone
 
 from llm.base import LLMProvider, LLMResult
-from llm.provider_factory import get_llm_for_model
 
 # Import templates — the nepa_ea module registers itself on import
 from agents.templates import TemplateRegistry
@@ -41,8 +39,8 @@ class ReportSynthesisAgent:
     pipeline outputs, producing a structured report with per-section
     narrative, confidence highlighting, and disclaimer aggregation."""
 
-    def __init__(self):
-        self.llm: LLMProvider | None = None
+    def __init__(self, llm: LLMProvider):
+        self.llm = llm
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._total_llm_calls = 0
@@ -54,10 +52,7 @@ class ReportSynthesisAgent:
         warn = lambda msg, *a: logger.warning(f"[ReportSynthesis:{cid}] " + msg, *a)
         t0 = time.time()
 
-        log("Starting report synthesis")
-
-        # Resolve LLM provider
-        self._resolve_llm(log, warn)
+        log("Starting report synthesis — provider: %s", self.llm.provider_name)
 
         # Reset per-run counters
         self._total_input_tokens = 0
@@ -87,13 +82,10 @@ class ReportSynthesisAgent:
             log("Section %s: %s (llm=%s)", sid, title, requires_llm)
             section_data = template.get_section_data(sid, state)
 
-            if requires_llm and self.llm is not None:
+            if requires_llm:
                 content = self._generate_narrative(
                     template, sid, section_data, log, warn
                 )
-            elif requires_llm:
-                content = f"*[LLM unavailable — narrative generation skipped for this section]*"
-                warn("Skipping LLM section %s — no provider", sid)
             else:
                 content = template.render_static_section(sid, section_data)
 
@@ -174,21 +166,6 @@ class ReportSynthesisAgent:
             time.time() - t0)
 
         return state
-
-    # ── LLM resolution ───────────────────────────────────────────────────
-
-    def _resolve_llm(self, log, warn):
-        """Try to resolve an LLM provider. Non-fatal if unavailable."""
-        if self.llm is not None:
-            return
-        try:
-            self.llm = get_llm_for_model("gemini-2.5-flash")
-            self._model_used = "gemini-2.5-flash"
-            log("LLM resolved: %s", self.llm.provider_name)
-        except Exception as exc:
-            warn("Could not resolve LLM provider: %s — narrative sections "
-                 "will use placeholders", exc)
-            self.llm = None
 
     # ── Narrative generation ─────────────────────────────────────────────
 
