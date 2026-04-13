@@ -1,6 +1,5 @@
 const NON_LLM_AGENTS = new Set([
   'environmental_data',
-  'impact_analysis',
   'report_synthesis',
 ])
 
