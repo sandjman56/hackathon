@@ -103,3 +103,42 @@ def test_save_outputs_overwrites(client, saved_project):
     # Load and verify overwrite
     r2 = client.get(f"/api/projects/{pid}/outputs")
     assert r2.json()["agent_outputs"]["project_parser"]["project_type"] == "wind farm"
+
+
+def test_load_outputs_after_save(client, saved_project):
+    pid = saved_project["id"]
+    client.post(f"/api/projects/{pid}/outputs", json=SAMPLE_OUTPUTS)
+
+    r = client.get(f"/api/projects/{pid}/outputs")
+    assert r.status_code == 200
+    body = r.json()
+
+    # agent_outputs round-trip
+    assert body["agent_outputs"]["project_parser"]["project_type"] == "solar farm"
+    assert body["agent_outputs"]["regulatory_screening"][0]["name"] == "CWA 404"
+    assert body["agent_outputs"]["report_synthesis"]["reports"][0]["document_type"] == "EA"
+
+    # agent_costs round-trip
+    pp_cost = body["agent_costs"]["project_parser"]
+    assert pp_cost["model"] == "gemini-2.5-flash"
+    assert pp_cost["input_tokens"] == 120
+    assert pp_cost["output_tokens"] == 450
+    assert float(pp_cost["cost_usd"]) == pytest.approx(0.00034, abs=1e-6)
+
+    # environmental_data has no cost
+    assert body["agent_costs"]["environmental_data"] is None
+
+
+def test_load_outputs_no_outputs(client, saved_project):
+    """Loading outputs for a project that hasn't been run returns all nulls."""
+    r = client.get(f"/api/projects/{saved_project['id']}/outputs")
+    assert r.status_code == 200
+    body = r.json()
+    for agent in AGENT_NAMES:
+        assert body["agent_outputs"][agent] is None
+        assert body["agent_costs"][agent] is None
+
+
+def test_load_outputs_project_not_found(client):
+    r = client.get("/api/projects/99999/outputs")
+    assert r.status_code == 404
