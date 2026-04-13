@@ -25,6 +25,7 @@ function App() {
   const [view, setView]         = useState('main')
   const { selections, setSelection, availableProviders, modelCatalog } = useModelSelections()
   const [agentCosts, setAgentCosts] = useState({})
+  const [currentProjectId, setCurrentProjectId] = useState(null)
 
   const handleCostUpdate = (data) => {
     setAgentCosts((prev) => ({ ...prev, [data.agent]: data }))
@@ -103,6 +104,22 @@ function App() {
               onRunningChange={handleRunningChange}
               modelSelections={selections}
               onCostUpdate={handleCostUpdate}
+              onProjectIdChange={setCurrentProjectId}
+              onLoadOutputs={(outputs, costs, pipelineStatus) => {
+                setAgentOutputs(outputs)
+                setAgentCosts(costs)
+                setPipelineState(pipelineStatus)
+                const hasAnyOutput = Object.values(outputs).some(v => v !== null)
+                if (hasAnyOutput) {
+                  setResults({
+                    impact_matrix: outputs.impact_analysis || {},
+                    regulations: outputs.regulatory_screening || [],
+                    report: outputs.report_synthesis || {},
+                  })
+                } else {
+                  setResults(null)
+                }
+              }}
             />
           </div>
 
