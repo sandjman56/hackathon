@@ -26,6 +26,7 @@ function App() {
   const { selections, setSelection, availableProviders, modelCatalog } = useModelSelections()
   const [agentCosts, setAgentCosts] = useState({})
   const [currentProjectId, setCurrentProjectId] = useState(null)
+  const [saveResultsFlash, setSaveResultsFlash] = useState(null) // null | 'saving' | 'saved' | 'error'
 
   const handleCostUpdate = (data) => {
     setAgentCosts((prev) => ({ ...prev, [data.agent]: data }))
@@ -67,6 +68,32 @@ function App() {
         // best-effort
       }
       setRunning(false)
+    }
+  }
+
+  const handleSaveResults = async () => {
+    if (!currentProjectId) {
+      setSaveResultsFlash('error')
+      setTimeout(() => setSaveResultsFlash(null), 2000)
+      return
+    }
+    setSaveResultsFlash('saving')
+    try {
+      const apiBase = import.meta.env.VITE_API_URL ?? ''
+      const res = await fetch(`${apiBase}/api/projects/${currentProjectId}/outputs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_outputs: agentOutputs,
+          agent_costs: agentCosts,
+        }),
+      })
+      if (!res.ok) throw new Error('save failed')
+      setSaveResultsFlash('saved')
+      setTimeout(() => setSaveResultsFlash(null), 1500)
+    } catch {
+      setSaveResultsFlash('error')
+      setTimeout(() => setSaveResultsFlash(null), 2000)
     }
   }
 
@@ -140,6 +167,22 @@ function App() {
             </div>
             <div style={styles.colMiddleBottom}>
               <ResultsPanel results={results} />
+              {!running && Object.keys(agentOutputs).length > 0 && (
+                <button
+                  onClick={handleSaveResults}
+                  disabled={saveResultsFlash === 'saving'}
+                  style={{
+                    ...styles.saveResultsBtn,
+                    ...(saveResultsFlash === 'saved' ? styles.saveResultsBtnSaved : {}),
+                    ...(saveResultsFlash === 'error' ? styles.saveResultsBtnError : {}),
+                  }}
+                >
+                  {saveResultsFlash === 'saving' ? 'SAVING...'
+                    : saveResultsFlash === 'saved' ? 'SAVED!'
+                    : saveResultsFlash === 'error' ? 'SAVE PROJECT FIRST'
+                    : 'SAVE RESULTS'}
+                </button>
+              )}
             </div>
           </div>
 
@@ -276,6 +319,29 @@ const styles = {
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+  },
+  saveResultsBtn: {
+    width: '100%',
+    marginTop: '12px',
+    padding: '10px',
+    background: 'transparent',
+    color: 'var(--green-primary)',
+    border: '1px solid var(--green-primary)',
+    borderRadius: '4px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '11px',
+    fontWeight: 600,
+    letterSpacing: '2px',
+    cursor: 'pointer',
+    transition: 'background 0.15s, color 0.15s',
+  },
+  saveResultsBtnSaved: {
+    background: 'var(--green-primary)',
+    color: '#0a0a0a',
+  },
+  saveResultsBtnError: {
+    borderColor: '#ff4444',
+    color: '#ff4444',
   },
 }
 
