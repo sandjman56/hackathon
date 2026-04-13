@@ -6,7 +6,7 @@ Chapter > Part > Section — so that an embedding query like
 "when must an agency prepare an environmental assessment" matches the
 header instead of having to fish the answer out of paragraph text.
 
-Three formats are supported:
+Four formats are supported:
 
 1. **CFR regulation**
    ``Title 40 — Protection of Environment > Chapter V — Council on``
@@ -34,6 +34,10 @@ _EQIA_ROOT = "Environmental Quality Improvement Act (42 USC \u00a74371 et seq.)"
 _CAA_ROOT = "Clean Air Act \u00a7309 (42 USC \u00a77609)"
 _EO_ROOT = "Executive Order 11514 (1970) — Protection and Enhancement of Environmental Quality"
 
+# PA Code static parents
+_PA_TITLE_25 = "Title 25 \u2014 Environmental Protection"
+_PA_CHAPTER_105 = "Chapter 105 \u2014 Dam Safety and Waterway Management"
+
 
 def build_breadcrumb(chunk: Chunk) -> str:
     """Return the breadcrumb string for a chunk.
@@ -50,6 +54,8 @@ def build_breadcrumb(chunk: Chunk) -> str:
         return _statute_breadcrumb(chunk, primary)
     if primary.document_type == DocumentType.EXECUTIVE_ORDER:
         return _eo_breadcrumb(chunk, primary)
+    if primary.document_type == DocumentType.STATE_CODE:
+        return _state_code_breadcrumb(chunk, primary)
     raise ValueError(f"unknown document_type: {primary.document_type}")
 
 
@@ -111,3 +117,27 @@ def _eo_breadcrumb(chunk: Chunk, raw: RawSection) -> str:
     if chunk.subsection:
         section_label = f"{section_label} {chunk.subsection}"
     return f"{_EO_ROOT} > {section_label}"
+
+
+def _state_code_breadcrumb(chunk: Chunk, raw: RawSection) -> str:
+    subchapter_label = f"Subchapter {raw.part}"
+    if raw.part_title:
+        subchapter_label = f"{subchapter_label} \u2014 {raw.part_title}"
+
+    if chunk.is_merged_siblings and len(chunk.sources) > 1:
+        first = chunk.sources[0]
+        last = chunk.sources[-1]
+        section_label = (
+            f"\u00a7 {first.section}\u2013{last.section} \u2014 "
+            + " / ".join(s.title for s in chunk.sources)
+        )
+    else:
+        section_label = f"\u00a7 {raw.section} \u2014 {raw.title}"
+
+    if chunk.is_definition:
+        section_label = f"{section_label} [DEFINITION]"
+    if chunk.subsection:
+        section_label = f"{section_label} {chunk.subsection}"
+
+    parts = [_PA_TITLE_25, _PA_CHAPTER_105, subchapter_label, section_label]
+    return " > ".join(parts)

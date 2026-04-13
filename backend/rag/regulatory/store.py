@@ -155,9 +155,12 @@ def build_metadata(
         document_type = "statute"
     elif primary.document_type == DocumentType.EXECUTIVE_ORDER:
         document_type = "executive_order"
+    elif primary.document_type == DocumentType.STATE_CODE:
+        document_type = "state_code"
     else:
         document_type = "unknown"
 
+    is_state = primary.document_type == DocumentType.STATE_CODE
     pages = sorted({p for s in chunk.sources for p in s.pages})
 
     return {
@@ -174,12 +177,17 @@ def build_metadata(
         "chunk_index": chunk.chunk_index,
         "total_chunks_in_section": chunk.total_chunks_in_section,
         "document_type": document_type,
-        "agency": "CEQ",
-        "statute": primary.parent_statute or "NEPA",
+        "agency": "PA DEP" if is_state else "CEQ",
+        "jurisdiction": "Pennsylvania" if is_state else "Federal",
+        "statute": primary.parent_statute or ("PA Code" if is_state else "NEPA"),
         "statute_title": primary.statute_title,
         "effective_date": primary.effective_date,
         "is_current": is_current,
-        "url": "https://www.ecfr.gov/current/title-40/chapter-V/subchapter-A",
+        "url": (
+            "https://www.pacodeandbulletin.gov/Display/pacode?file=/secure/pacode/data/025/chapter105/chap105toc.html"
+            if is_state else
+            "https://www.ecfr.gov/current/title-40/chapter-V/subchapter-A"
+        ),
         "breadcrumb": breadcrumb,
         "token_count": chunk.token_count,
         "page_numbers": pages,
@@ -321,6 +329,7 @@ _ALLOWED_FILTER_KEYS = {
     "statute",
     "section",
     "agency",
+    "jurisdiction",
     "source",
     "is_current",
     "is_definition",
