@@ -27,7 +27,10 @@ export default function ResultsPanel({ results }) {
     )
   }
 
-  const impactMatrix = results.impact_matrix || []
+  const impactMatrix = results.impact_matrix || {}
+  const matrixCells = impactMatrix.cells || []
+  const matrixActions = impactMatrix.actions || []
+  const matrixCategories = impactMatrix.categories || []
   const regulations = results.regulations || []
 
   return (
@@ -54,35 +57,84 @@ export default function ResultsPanel({ results }) {
       <div style={styles.tabContent}>
         {activeTab === 0 && (
           <div style={styles.tableWrap}>
-            {impactMatrix.length === 0 ? (
+            {matrixCells.length === 0 ? (
               <p style={styles.noData}>No impact data available</p>
             ) : (
               <table style={styles.table}>
                 <thead>
                   <tr>
                     <th style={styles.th}>Category</th>
-                    <th style={styles.th}>Significance</th>
-                    <th style={styles.th}>Notes</th>
+                    {matrixActions.map((action, i) => (
+                      <th key={i} style={{...styles.th, minWidth: '140px'}}>
+                        {action}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {impactMatrix.map((row, i) => (
+                  {matrixCategories.map((cat, ri) => (
                     <tr
-                      key={i}
+                      key={cat}
                       style={{
-                        background: i % 2 === 0 ? '#161616' : '#111111',
+                        background: ri % 2 === 0 ? '#161616' : '#111111',
                       }}
                     >
-                      <td style={styles.td}>{row.category}</td>
-                      <td
-                        style={{
-                          ...styles.td,
-                          color: significanceColor(row.significance),
-                        }}
-                      >
-                        {row.significance}
+                      <td style={{...styles.td, fontWeight: 600, whiteSpace: 'nowrap'}}>
+                        {cat.replace(/_/g, ' ')}
                       </td>
-                      <td style={styles.td}>{row.notes}</td>
+                      {matrixActions.map((action, ci) => {
+                        const cell = matrixCells.find(
+                          c => c.category === cat && c.action === action
+                        )
+                        if (!cell) {
+                          return (
+                            <td key={ci} style={{...styles.td, color: 'var(--text-muted)'}}>
+                              —
+                            </td>
+                          )
+                        }
+                        const det = cell.determination || {}
+                        return (
+                          <td key={ci} style={styles.td}>
+                            <div style={{
+                              color: significanceColor(det.significance),
+                              fontWeight: 600,
+                              fontSize: '12px',
+                            }}>
+                              {det.significance}
+                              {det.needs_review && (
+                                <span style={styles.reviewBadge} title="Flagged for human review">
+                                  ⚠
+                                </span>
+                              )}
+                            </div>
+                            <div style={{
+                              fontSize: '10px',
+                              color: 'var(--text-muted)',
+                              marginTop: '2px',
+                            }}>
+                              {Math.round((det.confidence || 0) * 100)}% conf
+                            </div>
+                            {det.mitigation?.length > 0 && (
+                              <div style={{
+                                fontSize: '9px',
+                                color: 'var(--text-secondary)',
+                                marginTop: '2px',
+                              }}>
+                                {det.mitigation.join(', ')}
+                              </div>
+                            )}
+                            <div style={{
+                              fontSize: '10px',
+                              color: 'var(--text-secondary)',
+                              marginTop: '4px',
+                              lineHeight: 1.3,
+                            }}>
+                              {det.reasoning}
+                            </div>
+                          </td>
+                        )
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -205,6 +257,11 @@ const styles = {
     color: 'var(--text-muted)',
     textAlign: 'center',
     padding: '40px',
+  },
+  reviewBadge: {
+    marginLeft: '4px',
+    fontSize: '11px',
+    cursor: 'help',
   },
   regCard: {
     background: 'var(--bg-card)',
