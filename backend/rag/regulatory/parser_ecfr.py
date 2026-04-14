@@ -11,6 +11,13 @@ Used by: services/regulatory_ingest.py (via detect_parser dispatch)
 
 Design spec: docs/superpowers/specs/2026-04-14-phase-1-ecfr-pipeline-design.md
 
+Appendix tag structure (spike resolution):
+  Observed in Phase 1 target parts (23 CFR 771, 33 CFR 323, 36 CFR 800):
+  appendices arrive as <DIV9 TYPE="APPENDIX"> siblings of the part's
+  <DIV8> sections. Ids take the form "Appendix A to Part 800". Dispatch
+  lives in the main DIV8/DIV9 loop; id normalization in
+  _normalize_appendix_id().
+
 Warning-vs-log convention:
   - Append to the returned list[str] when something abnormal is observed
     that the operator should see (unrecognized structural tag, missing
