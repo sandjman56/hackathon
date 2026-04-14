@@ -327,6 +327,71 @@ def update_progress(conn: Any, source_id: str, chunks_embedded: int) -> None:
     conn.commit()
 
 
+def source_exists(conn: Any, source_id: str) -> bool:
+    """Return True iff a row with this id exists in regulatory_sources."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT 1 FROM {TABLE} WHERE id = %s;",
+            (source_id,),
+        )
+        return cur.fetchone() is not None
+
+
+def count_chunks_for_source(conn: Any, source_id: str) -> int:
+    """Return the number of chunks belonging to a source."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT COUNT(*) FROM {CHUNKS_TABLE} WHERE source_id = %s;",
+            (source_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError(
+                "count_chunks_for_source: COUNT(*) returned no row"
+            )
+        return int(row[0])
+
+
+def list_chunks_for_source(
+    conn: Any,
+    source_id: str,
+    *,
+    limit: int,
+    offset: int,
+) -> list[dict]:
+    """Return a page of chunks for a source, sorted by id.
+
+    Shape matches the /sources/{id}/chunks endpoint contract:
+    ``[{id, content, metadata, citation, breadcrumb, token_count}]``.
+    The metadata column is defensively coalesced to ``{}`` when NULL so
+    callers can always read nested fields safely. The ``bytes`` column is
+    never fetched here (see module docstring).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, content, metadata
+              FROM {CHUNKS_TABLE}
+             WHERE source_id = %s
+             ORDER BY id
+             LIMIT %s OFFSET %s
+            """,
+            (source_id, limit, offset),
+        )
+        out: list[dict] = []
+        for row in cur.fetchall():
+            meta = row[2] or {}
+            out.append({
+                "id": str(row[0]),
+                "content": row[1],
+                "metadata": meta,
+                "citation": meta.get("citation"),
+                "breadcrumb": meta.get("breadcrumb"),
+                "token_count": meta.get("token_count"),
+            })
+        return out
+
+
 def cascade_delete_chunks(conn: Any, source_id: str) -> int:
     """Delete all chunks belonging to a source. Returns the row count."""
     with conn.cursor() as cur:

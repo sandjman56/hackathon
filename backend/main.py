@@ -27,6 +27,9 @@ from db.regulatory_sources import (
     get_source_by_id,
     cascade_delete_chunks,
     delete_source,
+    source_exists,
+    count_chunks_for_source,
+    list_chunks_for_source,
 )
 from services.regulatory_ingest import ingest_source_sync
 from services.ecfr_ingest import ingest_ecfr_source
@@ -332,43 +335,25 @@ def get_regulatory_source_chunks(
     page = max(1, page)
     offset = (page - 1) * per_page
 
+    cid = _new_correlation_id()
+    _sources_logger.info(
+        "[sources:%s] chunks list: source_id=%s page=%d per_page=%d",
+        cid, source_id, page, per_page,
+    )
+
     conn = _get_connection()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM regulatory_sources WHERE id = %s",
-                (source_id,),
+        if not source_exists(conn, source_id):
+            _sources_logger.warning(
+                "[sources:%s] chunks list: source_not_found id=%s",
+                cid, source_id,
             )
-            if cur.fetchone() is None:
-                raise HTTPException(status_code=404, detail="source not found")
+            raise HTTPException(status_code=404, detail="source not found")
 
-            cur.execute(
-                "SELECT COUNT(*) FROM regulatory_chunks WHERE source_id = %s",
-                (source_id,),
-            )
-            (total,) = cur.fetchone()
-
-            cur.execute(
-                """
-                SELECT id, content, metadata
-                  FROM regulatory_chunks
-                 WHERE source_id = %s
-                 ORDER BY id
-                 LIMIT %s OFFSET %s
-                """,
-                (source_id, per_page, offset),
-            )
-            chunks = [
-                {
-                    "id": str(row[0]),
-                    "content": row[1],
-                    "metadata": row[2] or {},
-                    "citation": (row[2] or {}).get("citation"),
-                    "breadcrumb": (row[2] or {}).get("breadcrumb"),
-                    "token_count": (row[2] or {}).get("token_count"),
-                }
-                for row in cur.fetchall()
-            ]
+        total = count_chunks_for_source(conn, source_id)
+        chunks = list_chunks_for_source(
+            conn, source_id, limit=per_page, offset=offset,
+        )
     finally:
         conn.close()
 
