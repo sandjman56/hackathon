@@ -97,6 +97,15 @@ Set `DATABASE_URL` in `.env` to your connection string:
 DATABASE_URL=postgresql://user:password@localhost:5432/eia_db
 ```
 
+### Regulatory Source Ingestion
+
+The regulatory RAG store ingests:
+
+- **PDF uploads** via `POST /api/regulations/sources` (multipart upload) — federal CFR/statute PDFs and Pennsylvania Code PDFs
+- **eCFR XML** via `POST /api/regulations/sources/ecfr` or `python -m scripts.ingest_ecfr` — live CFR parts fetched from the eCFR Versioner API
+
+See [`docs/ingest-ecfr.md`](docs/ingest-ecfr.md) for the eCFR ingest operator guide.
+
 ## Switching LLM Providers
 
 Change two environment variables — no code changes needed:
