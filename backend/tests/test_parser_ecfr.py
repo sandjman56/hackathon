@@ -74,3 +74,38 @@ def test_parse_missing_hierarchy_metadata_falls_back():
     # Citation is constructed when hierarchy_metadata is absent.
     assert "999.1" in sections[0].citation
     assert any("hierarchy_metadata" in w for w in warnings)
+
+
+def test_parse_36_cfr_800_appendix_ids_normalized():
+    """Appendix section IDs must not double-prefix 'App'."""
+    sections, _ = parse_ecfr_xml(_load("title-36_part-800.xml"))
+    appendix_ids = [s.section for s in sections if s.section.startswith("App")]
+    assert appendix_ids, "expected at least one appendix in 36 CFR 800"
+    for sid in appendix_ids:
+        # No double-App prefix (e.g. 'AppAppendix A...')
+        assert not sid.lower().startswith("appappendix"), (
+            f"appendix id not normalized: {sid!r}"
+        )
+        # ID must be short — a normalized appendix letter/roman is <10 chars
+        # including the 'App' prefix. Reject ids that clearly carry the full
+        # verbose 'Appendix X to Part Y' string.
+        assert "to Part" not in sid, f"verbose name leaked into id: {sid!r}"
+
+
+def test_parse_invalid_hierarchy_json_emits_warning():
+    """If hierarchy_metadata is present but unparseable JSON, warn + fallback."""
+    xml = (
+        b'<DIV5 N="999" TYPE="PART" hierarchy_metadata="{not valid json">'
+        b'<HEAD>PART 999</HEAD>'
+        b'<DIV8 N="999.1" TYPE="SECTION" hierarchy_metadata="{also broken">'
+        b'<HEAD>\xc2\xa7 999.1 T.</HEAD>'
+        b'<P>x</P>'
+        b'</DIV8>'
+        b'</DIV5>'
+    )
+    sections, warnings = parse_ecfr_xml(xml)
+    assert len(sections) == 1
+    # Fallback citation since hierarchy_metadata JSON failed to parse.
+    assert "999.1" in sections[0].citation
+    # At least one warning mentions hierarchy_metadata being unusable.
+    assert any("hierarchy_metadata" in w for w in warnings), warnings

@@ -171,13 +171,38 @@ def _section_from_div8(
     )
 
 
+def _normalize_appendix_id(n: str) -> str:
+    """Derive a short, stable section id from a DIV9 N attribute.
+
+    Real eCFR uses verbose ``N`` values like "Appendix A to Part 800" or
+    "Appendix I". Prefer extracting the letter/roman-numeral token after
+    the word "Appendix"; fall back to prefixing "App" for short letter-only
+    values ("A" -> "AppA"); fall back to "App" for empty.
+    """
+    import re
+    n = (n or "").strip()
+    if not n:
+        return "App"
+    # "Appendix A to Part 800" -> "A"; "Appendix III" -> "III"; "Appendix A" -> "A"
+    m = re.match(r"^\s*Appendix\s+([A-Z0-9IVX]+)\b", n, flags=re.IGNORECASE)
+    if m:
+        return f"App{m.group(1).upper()}"
+    # Already a short letter/numeral like "A" or "I"
+    if re.fullmatch(r"[A-Z0-9IVX]+", n):
+        return f"App{n.upper()}"
+    # Otherwise: prefix with "App" and strip whitespace to produce at least
+    # a distinguishable-but-terse id.
+    slug = re.sub(r"\s+", "_", n)
+    return f"App_{slug}"
+
+
 def _section_from_div9(
     el: ET.Element, part: str, part_title: str, warnings: list[str]
 ) -> RawSection:
     n = el.attrib.get("N", "").strip()
     hier = _parse_hierarchy(el, warnings)
     head_text = _head_text(el)
-    section_id = f"App{n}" if n else "App"
+    section_id = _normalize_appendix_id(n)
     body = _collect_body(el)
     citation = _citation(hier, part, section_id, default=f"{part} CFR App. {n}".strip())
 
