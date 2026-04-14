@@ -18,7 +18,17 @@ def _get_connection():
 
 
 def init_db():
-    """Enable pgvector extension and create the documents table if needed."""
+    """Enable pgvector extension and create core tables if needed.
+
+    Also delegates to init_regulatory_sources_table() to ensure
+    regulatory_sources and its Phase 1 eCFR columns are present before
+    any callers attempt to use them.
+    """
+    # Import here to avoid circular imports; regulatory_sources imports
+    # nothing from vector_store.
+    from db.regulatory_sources import init_regulatory_sources_table
+
+    conn = None
     try:
         conn = _get_connection()
         cur = conn.cursor()
@@ -63,14 +73,28 @@ def init_db():
             """)
         conn.commit()
         cur.close()
-        conn.close()
-        logger.info("Database initialized: pgvector extension enabled, documents table ready")
+
+        # Create regulatory_sources (with Phase 1 eCFR columns) and the
+        # regulatory_ingest_log audit table.  Uses the same connection so
+        # everything is committed before we return.
+        init_regulatory_sources_table(conn)
+
+        logger.info(
+            "Database initialized: pgvector extension enabled, "
+            "documents + projects + regulatory tables ready"
+        )
     except psycopg2.OperationalError as e:
         logger.error(f"Failed to connect to database: {e}")
         raise
     except Exception as e:
         logger.error(f"Database initialization error: {e}")
         raise
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def get_vector_store() -> PGVectorStore:

@@ -28,8 +28,12 @@ from db.regulatory_sources import (
     get_source_by_id,
     cascade_delete_chunks,
     delete_source,
+    source_exists,
+    count_chunks_for_source,
+    list_chunks_for_source,
 )
 from services.regulatory_ingest import ingest_source_sync
+from services.ecfr_ingest import ingest_ecfr_source
 from services.export_report import generate_pdf, generate_latex
 from rag.regulatory.store import init_regulatory_table
 from rag.regulatory.embedder import detect_embedding_dimension
@@ -417,6 +421,50 @@ def get_regulatory_source(source_id: str):
         conn.close()
 
 
+@app.get("/api/regulations/sources/{source_id}/chunks")
+def get_regulatory_source_chunks(
+    source_id: str,
+    page: int = 1,
+    per_page: int = 25,
+):
+    """Paginated, untruncated chunks for one source, sorted by id."""
+    per_page = max(1, min(per_page, 200))
+    page = max(1, page)
+    offset = (page - 1) * per_page
+
+    cid = _new_correlation_id()
+    _sources_logger.info(
+        "[sources:%s] chunks list: source_id=%s page=%d per_page=%d",
+        cid, source_id, page, per_page,
+    )
+
+    conn = _get_connection()
+    try:
+        if not source_exists(conn, source_id):
+            _sources_logger.warning(
+                "[sources:%s] chunks list: source_not_found id=%s",
+                cid, source_id,
+            )
+            raise HTTPException(status_code=404, detail="source not found")
+
+        total = count_chunks_for_source(conn, source_id)
+        chunks = list_chunks_for_source(
+            conn, source_id, limit=per_page, offset=offset,
+        )
+    finally:
+        conn.close()
+
+    total_pages = (total + per_page - 1) // per_page if total else 0
+    return {
+        "source_id": source_id,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "chunks": chunks,
+    }
+
+
 def _run_ingest_background(source_id: str, correlation_id: str):
     """Background task entrypoint. Opens its own DB connection."""
     conn = _get_connection()
@@ -494,6 +542,91 @@ async def upload_regulatory_source(
         _sources_logger.info("[sources:%s] dedup hit, already ready, no ingest", cid)
 
     return row
+
+
+class EcfrIngestRequest(BaseModel):
+    """Request body for POST /api/regulations/sources/ecfr."""
+    title: int = Field(
+        ..., ge=1, le=50,
+        description="CFR title number (1–50). Example: 36 for 36 CFR.",
+    )
+    part: str = Field(
+        ..., min_length=1, max_length=20,
+        description="CFR part identifier. String, not int, because parts can have suffixes.",
+    )
+    date: str | None = Field(
+        default="current",
+        pattern=r"^(current|\d{4}-\d{2}-\d{2})$",
+        description=(
+            "Version to fetch. 'current' (default) resolves to the latest valid "
+            "amendment date. An ISO date fetches the snapshot from that date."
+        ),
+    )
+
+
+def _run_ecfr_ingest_background(
+    *, title: int, part: str, date: str, correlation_id: str,
+) -> None:
+    """Background task entrypoint for POST /api/regulations/sources/ecfr.
+
+    Opens its own DB connection, delegates to the orchestrator, logs any
+    exception with stack trace before letting BackgroundTasks swallow it
+    (otherwise errors before the orchestrator's first audit write would
+    be completely invisible).
+    """
+    try:
+        conn = _get_connection()
+    except Exception:
+        _sources_logger.exception(
+            "[sources:%s] eCFR ingest failed to open DB connection",
+            correlation_id,
+        )
+        return
+    try:
+        ingest_ecfr_source(
+            conn,
+            title=title, part=part, date=date,
+            embedding_provider=app.state.embedding_provider,
+            correlation_id=correlation_id,
+            trigger="api",
+        )
+    except Exception:
+        _sources_logger.exception(
+            "[sources:%s] eCFR ingest raised in background task",
+            correlation_id,
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            _sources_logger.exception(
+                "[sources:%s] conn.close() raised", correlation_id,
+            )
+
+
+@app.post("/api/regulations/sources/ecfr", status_code=202)
+async def post_regulatory_source_ecfr(
+    req: EcfrIngestRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Kick off eCFR ingest. Fetch + upsert + embed run in background; response is immediate."""
+    cid = _new_correlation_id()
+
+    background_tasks.add_task(
+        _run_ecfr_ingest_background,
+        title=req.title, part=req.part, date=req.date or "current",
+        correlation_id=cid,
+    )
+    return {
+        "source_id": None,  # filled in on poll once upsert completes
+        "correlation_id": cid,
+        "status": "pending",
+        "message": (
+            f"eCFR ingest started for title {req.title} part {req.part}; "
+            f"poll GET /api/regulations/sources and match on cfr_title={req.title}, "
+            f"cfr_part='{req.part}' to see status transition to 'ready' or 'failed'."
+        ),
+    }
 
 
 @app.delete("/api/regulations/sources/{source_id}")

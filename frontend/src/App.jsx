@@ -6,6 +6,7 @@ import BrainScanner from './components/BrainScanner.jsx'
 import DatabaseView from './components/DatabaseView.jsx'
 import EvaluationsView from './components/EvaluationsView.jsx'
 import useModelSelections from './hooks/useModelSelections.js'
+import { runEcfrIngestCommand } from './lib/ecfrIngestCommand.js'
 
 const AGENTS = [
   'project_parser',
@@ -69,7 +70,18 @@ function App() {
         // best-effort
       }
       setRunning(false)
+      return
     }
+
+    if (cmd === '/ingest-ecfr' || cmd.startsWith('/ingest-ecfr ')) {
+      await runEcfrIngestCommand(cmd, handleLog)
+      return
+    }
+
+    handleLog({
+      ts: Date.now() / 1000, level: 'WARNING', logger: 'eia.cli',
+      msg: `unknown command: ${cmd} — try /ingest-ecfr <title> <part> [date] or /q`,
+    })
   }
 
   const handleSaveResults = async () => {

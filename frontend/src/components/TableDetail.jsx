@@ -1,8 +1,13 @@
 import { useEffect, useState, useCallback } from 'react'
+import ChunksView from './ChunksView'
 
 const apiBase = import.meta.env.VITE_API_URL ?? ''
 
 export default function TableDetail({ tableName, onBack }) {
+  if (tableName === 'regulatory_chunks') {
+    return <ChunksView onBack={onBack} />
+  }
+
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)

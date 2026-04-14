@@ -16,6 +16,7 @@ import pymupdf
 
 from db.regulatory_sources import (
     cascade_delete_chunks,
+    get_source_by_id,
     get_source_bytes,
     update_progress,
     update_status,
@@ -37,23 +38,33 @@ _PROGRESS_MIN_INTERVAL_S = 1.0
 _PROGRESS_MIN_DELTA = 5
 
 
-def detect_parser(blob: bytes) -> str:
-    """Sniff the first page of a PDF to pick the right parser.
+def detect_parser(blob: bytes, *, content_type: str) -> str:
+    """Route bytes to the right parser based on content_type.
+
+    EXTENSION POINT: add new content_type branches here.
+    Pattern: see parser_ecfr.py for the XML reference implementation.
+    See docs/ingest-ecfr.md 'Adding a new source type' for the procedure.
 
     Returns:
-        ``"pa_code"`` for PA Code browser-printed PDFs,
-        ``"federal"`` for NEPA/CFR-style scanned reprints.
+        ``"ecfr_xml"`` for eCFR Versioner XML responses,
+        ``"pa_code"`` for Pennsylvania Code browser-printed PDFs,
+        ``"federal"`` for NEPA/CFR-style scanned PDF reprints.
     """
-    try:
-        doc = pymupdf.open(stream=blob, filetype="pdf")
-        first_page_text = doc[0].get_text("text") if len(doc) > 0 else ""
-        doc.close()
-    except Exception:
+    if content_type == "application/xml":
+        return "ecfr_xml"
+
+    if content_type == "application/pdf":
+        try:
+            doc = pymupdf.open(stream=blob, filetype="pdf")
+            first_page_text = doc[0].get_text("text") if len(doc) > 0 else ""
+            doc.close()
+        except Exception:
+            return "federal"
+        if "Pennsylvania Code" in first_page_text:
+            return "pa_code"
         return "federal"
 
-    if "Pennsylvania Code" in first_page_text:
-        return "pa_code"
-    return "federal"
+    raise ValueError(f"unsupported content_type: {content_type!r}")
 
 
 def ingest_source_sync(
@@ -79,16 +90,25 @@ def ingest_source_sync(
         update_status(conn, source_id, status="embedding",
                       started_at_now=True)
 
+        row = get_source_by_id(conn, source_id)
+        if row is None:
+            raise RuntimeError(f"source row not found: {source_id}")
+        content_type = row.get("content_type") or "application/pdf"
+
         blob = get_source_bytes(conn, source_id)
         if blob is None:
-            raise RuntimeError(f"source row not found: {source_id}")
+            raise RuntimeError(f"source bytes missing: {source_id}")
 
-        parser_type = detect_parser(blob)
-        log("detected parser: %s, %d bytes", parser_type, len(blob))
+        parser_type = detect_parser(blob, content_type=content_type)
+        log("detected parser: %s (content_type=%s, %d bytes)",
+            parser_type, content_type, len(blob))
         t0 = time.time()
-        if parser_type == "pa_code":
+        if parser_type == "ecfr_xml":
+            from rag.regulatory.parser_ecfr import parse_ecfr_xml
+            sections, parser_warnings = parse_ecfr_xml(blob)
+        elif parser_type == "pa_code":
             sections, parser_warnings = parse_pa_code_pdf(blob)
-        else:
+        else:  # "federal"
             sections, parser_warnings = parse_pdf(blob)
         log("parse done: %d sections, %d warnings in %.2fs",
             len(sections), len(parser_warnings), time.time() - t0)
@@ -153,10 +173,6 @@ def ingest_source_sync(
 
         # Build rows + upsert
         init_regulatory_table(conn, embedding_dim=dim)
-        from db.regulatory_sources import get_source_by_id
-        row = get_source_by_id(conn, source_id)
-        if row is None:
-            raise RuntimeError(f"row vanished mid-ingest: {source_id}")
         rows = []
         for chunk, (breadcrumb, vec) in zip(chunks, embeddings):
             meta = build_metadata(

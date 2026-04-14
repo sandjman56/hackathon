@@ -141,7 +141,7 @@ export default function BrainScanner({ logs, running, onCommand }) {
           value={cmd}
           onChange={(e) => setCmd(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="type /q to interrupt..."
+          placeholder="/ingest-ecfr <title> <part> [date]  |  /q to interrupt"
           spellCheck={false}
           autoComplete="off"
         />

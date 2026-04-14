@@ -12,7 +12,9 @@ would introduce. The constant value must stay in sync with
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+from datetime import date as _date
 from typing import Any, Optional
 
 import psycopg2
@@ -43,12 +45,30 @@ _LIST_COLUMNS = """
     embedding_dim,
     embedding_started_at,
     embedding_finished_at,
-    is_current
+    is_current,
+    source_type,
+    content_type,
+    effective_date,
+    cfr_title,
+    cfr_part
 """
 
 
 def init_regulatory_sources_table(conn: Any) -> None:
-    """Create the table and its indexes if missing. Idempotent."""
+    """Provision regulatory schema: sources table and ingest audit log.
+
+    Creates (all idempotent):
+      * ``regulatory_sources`` with its indexes and the Phase 1 eCFR
+        columns (``source_type``, ``content_type``, ``effective_date``,
+        ``cfr_title``, ``cfr_part``) plus the partial unique index
+        scoped to ``source_type = 'ecfr'``.
+      * ``regulatory_ingest_log`` — the audit table that records each
+        ingest attempt (trigger, status, duration, chunk counts, errors)
+        along with its supporting indexes.
+
+    The function name is retained for backward compatibility even though
+    its responsibilities now extend beyond the sources table alone.
+    """
     with conn.cursor() as cur:
         cur.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto";')
         cur.execute(
@@ -77,6 +97,48 @@ def init_regulatory_sources_table(conn: Any) -> None:
         cur.execute(
             f"CREATE INDEX IF NOT EXISTS {TABLE}_status_idx ON {TABLE} (status);"
         )
+
+        # ---- Phase 1 eCFR schema additions ----
+        cur.execute(f"""
+            ALTER TABLE {TABLE}
+              ADD COLUMN IF NOT EXISTS source_type    TEXT NOT NULL DEFAULT 'pdf_upload',
+              ADD COLUMN IF NOT EXISTS content_type   TEXT NOT NULL DEFAULT 'application/pdf',
+              ADD COLUMN IF NOT EXISTS effective_date DATE NULL,
+              ADD COLUMN IF NOT EXISTS cfr_title      INT  NULL,
+              ADD COLUMN IF NOT EXISTS cfr_part       TEXT NULL;
+        """)
+        # Partial unique index: only eCFR sources use tuple identity; PDF
+        # uploads continue using the sha256 unique constraint.
+        cur.execute(f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS {TABLE}_identity_idx
+              ON {TABLE} (source_type, cfr_title, cfr_part, effective_date)
+              WHERE source_type = 'ecfr';
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS regulatory_ingest_log (
+              id             BIGSERIAL PRIMARY KEY,
+              ts             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              correlation_id TEXT NOT NULL,
+              source_id      UUID NULL REFERENCES regulatory_sources(id) ON DELETE SET NULL,
+              trigger        TEXT NOT NULL,
+              source_type    TEXT NOT NULL,
+              cfr_title      INT NULL,
+              cfr_part       TEXT NULL,
+              effective_date DATE NULL,
+              status         TEXT NOT NULL,
+              duration_ms    INT NULL,
+              chunks_count   INT NULL,
+              error_message  TEXT NULL
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS regulatory_ingest_log_ts_idx
+              ON regulatory_ingest_log (ts DESC);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS regulatory_ingest_log_source_idx
+              ON regulatory_ingest_log (source_id);
+        """)
     conn.commit()
     logger.info("Initialized %s", TABLE)
 
@@ -111,6 +173,69 @@ def insert_source(
             raise RuntimeError("insert_source: INSERT ... RETURNING returned no row")
     conn.commit()
     return _normalize(row)
+
+
+def upsert_ecfr_source(
+    conn: Any,
+    *,
+    cfr_title: int,
+    cfr_part: str,
+    effective_date: _date | None,
+    filename: str,
+    bytes_: bytes,
+) -> str:
+    """Insert or update-in-place keyed on (source_type='ecfr', cfr_title,
+    cfr_part, effective_date) via the partial unique index. Returns the
+    row's UUID.
+
+    On update, refreshes bytes / sha256 / size_bytes / uploaded_at / status
+    while preserving the row id (so cascade_delete_chunks can clear stale
+    chunks in-place).
+
+    Note: the ``ON CONFLICT (cols) WHERE source_type = 'ecfr'`` clause
+    (inference against a partial unique index) requires PostgreSQL 15+.
+    """
+    sha = hashlib.sha256(bytes_).hexdigest()
+    size = len(bytes_)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO regulatory_sources
+              (filename, sha256, size_bytes, bytes,
+               source_type, content_type,
+               cfr_title, cfr_part, effective_date,
+               status, is_current)
+            VALUES (%s, %s, %s, %s,
+                    'ecfr', 'application/xml',
+                    %s, %s, %s,
+                    'pending', TRUE)
+            ON CONFLICT (source_type, cfr_title, cfr_part, effective_date)
+              WHERE source_type = 'ecfr'
+              DO UPDATE SET
+                filename       = EXCLUDED.filename,
+                sha256         = EXCLUDED.sha256,
+                size_bytes     = EXCLUDED.size_bytes,
+                bytes          = EXCLUDED.bytes,
+                uploaded_at    = NOW(),
+                status         = 'pending',
+                status_message = NULL,
+                chunks_total   = NULL,
+                chunks_embedded = 0,
+                chunk_count    = 0,
+                sections_count = 0,
+                parser_warnings = 0,
+                embedding_dim  = NULL,
+                embedding_started_at  = NULL,
+                embedding_finished_at = NULL
+            RETURNING id
+            """,
+            (filename, sha, size, psycopg2.Binary(bytes_),
+             cfr_title, cfr_part, effective_date),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("upsert_ecfr_source: no id returned")
+        return str(row[0])
 
 
 def find_by_sha256(conn: Any, sha256: str) -> Optional[dict]:
@@ -200,6 +325,71 @@ def update_progress(conn: Any, source_id: str, chunks_embedded: int) -> None:
             (chunks_embedded, source_id),
         )
     conn.commit()
+
+
+def source_exists(conn: Any, source_id: str) -> bool:
+    """Return True iff a row with this id exists in regulatory_sources."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT 1 FROM {TABLE} WHERE id = %s;",
+            (source_id,),
+        )
+        return cur.fetchone() is not None
+
+
+def count_chunks_for_source(conn: Any, source_id: str) -> int:
+    """Return the number of chunks belonging to a source."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT COUNT(*) FROM {CHUNKS_TABLE} WHERE source_id = %s;",
+            (source_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError(
+                "count_chunks_for_source: COUNT(*) returned no row"
+            )
+        return int(row[0])
+
+
+def list_chunks_for_source(
+    conn: Any,
+    source_id: str,
+    *,
+    limit: int,
+    offset: int,
+) -> list[dict]:
+    """Return a page of chunks for a source, sorted by id.
+
+    Shape matches the /sources/{id}/chunks endpoint contract:
+    ``[{id, content, metadata, citation, breadcrumb, token_count}]``.
+    The metadata column is defensively coalesced to ``{}`` when NULL so
+    callers can always read nested fields safely. The ``bytes`` column is
+    never fetched here (see module docstring).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, content, metadata
+              FROM {CHUNKS_TABLE}
+             WHERE source_id = %s
+             ORDER BY id
+             LIMIT %s OFFSET %s
+            """,
+            (source_id, limit, offset),
+        )
+        out: list[dict] = []
+        for row in cur.fetchall():
+            meta = row[2] or {}
+            out.append({
+                "id": str(row[0]),
+                "content": row[1],
+                "metadata": meta,
+                "citation": meta.get("citation"),
+                "breadcrumb": meta.get("breadcrumb"),
+                "token_count": meta.get("token_count"),
+            })
+        return out
 
 
 def cascade_delete_chunks(conn: Any, source_id: str) -> int:
