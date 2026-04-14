@@ -92,11 +92,18 @@ def _run_batch(
 ) -> tuple[list[tuple[int, str, str]], list[tuple[int, str, str]]]:
     successes: list[tuple[int, str, str]] = []
     failures: list[tuple[int, str, str]] = []
-    for entry in entries:
-        title = int(entry["title"])
-        part = str(entry["part"])
-        date = str(entry.get("date", "current"))
+    for idx, entry in enumerate(entries):
+        # Best-effort labels in case extraction fails below.
+        label_title: Any = entry.get("title", "?") if isinstance(entry, dict) else "?"
+        label_part: str = str(entry.get("part", "?")) if isinstance(entry, dict) else "?"
         try:
+            if not isinstance(entry, dict):
+                raise ValueError(f"entry #{idx} is not a mapping: {entry!r}")
+            if "title" not in entry or "part" not in entry:
+                raise ValueError(f"entry #{idx} missing title/part: {entry!r}")
+            title = int(entry["title"])
+            part = str(entry["part"])
+            date = str(entry.get("date", "current"))
             t0 = time.time()
             sid = _run_one(conn, title=title, part=part, date=date,
                            embedding_provider=embedding_provider)
@@ -104,14 +111,23 @@ def _run_batch(
             print(f"  OK  title-{title} part {part} ({elapsed:.1f}s) -> {sid}")
             successes.append((title, part, sid))
         except Exception as exc:
-            print(f"  FAIL title-{title} part {part}: {type(exc).__name__}: {exc}")
-            failures.append((title, part, f"{type(exc).__name__}: {exc}"))
+            try:
+                rec_title = int(label_title)
+            except (TypeError, ValueError):
+                rec_title = -1
+            rec_part = str(label_part)
+            print(f"  FAIL title-{label_title} part {label_part}: {type(exc).__name__}: {exc}")
+            failures.append((rec_title, rec_part, f"{type(exc).__name__}: {exc}"))
     return successes, failures
 
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = _parse_args(sys.argv[1:])
+
+    if args.from_file and (args.title is not None or args.part is not None):
+        print("--from-file is mutually exclusive with --title/--part", file=sys.stderr)
+        return 1
 
     if args.dry_run:
         if not (args.title and args.part):

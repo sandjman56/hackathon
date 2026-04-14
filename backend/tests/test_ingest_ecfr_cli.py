@@ -93,6 +93,34 @@ def test_batch_continues_after_failure(monkeypatch, tmp_path, capsys):
         ["--from-file", str(yaml_path)],
         monkeypatch, tmp_path, fake_service=fake,
     )
-    assert rc != 0  # non-zero because one failed
+    assert rc == 2  # batch-failure exit code per docstring
     out = capsys.readouterr().out
     assert "800" in out and "771" in out
+
+
+def test_batch_skips_malformed_entries(monkeypatch, tmp_path, capsys):
+    """Malformed YAML entries must not abort the batch."""
+    yaml_path = tmp_path / "parts.yaml"
+    # entry 0: missing 'part'
+    # entry 1: title not an int
+    # entry 2: valid
+    yaml_path.write_text(
+        "- title: 36\n"
+        "- title: not-an-int\n  part: '800'\n"
+        "- title: 23\n  part: '771'\n"
+    )
+    calls = []
+    def fake(conn, **kwargs):
+        calls.append((kwargs["title"], kwargs["part"]))
+        return f"sid-{kwargs['title']}"
+
+    rc = _run(
+        ["--from-file", str(yaml_path)],
+        monkeypatch, tmp_path, fake_service=fake,
+    )
+    assert rc == 2  # at least one failed
+    assert calls == [(23, "771")]  # only the valid entry reached the service
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "OK" in out
+    assert "771" in out
