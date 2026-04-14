@@ -423,7 +423,21 @@ class EcfrIngestRequest(BaseModel):
 def _run_ecfr_ingest_background(
     *, title: int, part: str, date: str, correlation_id: str,
 ) -> None:
-    conn = _get_connection()
+    """Background task entrypoint for POST /api/regulations/sources/ecfr.
+
+    Opens its own DB connection, delegates to the orchestrator, logs any
+    exception with stack trace before letting BackgroundTasks swallow it
+    (otherwise errors before the orchestrator's first audit write would
+    be completely invisible).
+    """
+    try:
+        conn = _get_connection()
+    except Exception:
+        logger.exception(
+            "[cid=%s] eCFR ingest failed to open DB connection",
+            correlation_id,
+        )
+        return
     try:
         ingest_ecfr_source(
             conn,
@@ -432,8 +446,16 @@ def _run_ecfr_ingest_background(
             correlation_id=correlation_id,
             trigger="api",
         )
+    except Exception:
+        logger.exception(
+            "[cid=%s] eCFR ingest raised in background task",
+            correlation_id,
+        )
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            logger.exception("[cid=%s] conn.close() raised", correlation_id)
 
 
 @app.post("/api/regulations/sources/ecfr", status_code=202)
@@ -442,7 +464,7 @@ async def post_regulatory_source_ecfr(
     background_tasks: BackgroundTasks,
 ):
     """Kick off eCFR ingest. Fetch + upsert + embed run in background; response is immediate."""
-    cid = uuid.uuid4().hex[:8]
+    cid = _new_correlation_id()
 
     background_tasks.add_task(
         _run_ecfr_ingest_background,
@@ -455,7 +477,8 @@ async def post_regulatory_source_ecfr(
         "status": "pending",
         "message": (
             f"eCFR ingest started for title {req.title} part {req.part}; "
-            f"poll GET /api/regulations/sources for status."
+            f"poll GET /api/regulations/sources and match on cfr_title={req.title}, "
+            f"cfr_part='{req.part}' to see status transition to 'ready' or 'failed'."
         ),
     }
 
