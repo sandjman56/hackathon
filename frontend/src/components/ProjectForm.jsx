@@ -14,7 +14,7 @@ const AGENTS = [
   'report_synthesis',
 ]
 
-export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate }) {
+export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate, onProjectIdChange, onLoadOutputs }) {
   const [projectName, setProjectName] = useState('')
   const [coordinates, setCoordinates] = useState('')
   const [description, setDescription] = useState('')
@@ -45,6 +45,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
       })
       const project = await res.json()
       setSavedProjects((prev) => [project, ...prev])
+      onProjectIdChange?.(project.id)
       setSaveFlash(true)
       setTimeout(() => setSaveFlash(false), 1200)
     } catch {
@@ -52,10 +53,43 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
     }
   }
 
-  const handleLoad = (project) => {
+  const handleLoad = async (project) => {
     setProjectName(project.name)
     setCoordinates(project.coordinates)
-    setDescription(project.description)
+    setDescription(project.description || '')
+    onProjectIdChange?.(project.id)
+
+    // Fetch saved agent outputs
+    try {
+      const res = await fetch(`${apiBase}/api/projects/${project.id}/outputs`)
+      if (!res.ok) return
+      const data = await res.json()
+
+      const outputs = data.agent_outputs || {}
+      const costs = data.agent_costs || {}
+
+      // Build pipeline status: "complete" if output exists, "idle" otherwise
+      const pipelineStatus = {}
+      const agentNames = [
+        'project_parser', 'environmental_data', 'regulatory_screening',
+        'impact_analysis', 'report_synthesis',
+      ]
+      for (const name of agentNames) {
+        pipelineStatus[name] = outputs[name] ? 'complete' : 'idle'
+      }
+
+      // Reconstruct agentCosts to match the SSE shape (include "agent" key)
+      const formattedCosts = {}
+      for (const name of agentNames) {
+        if (costs[name]) {
+          formattedCosts[name] = { agent: name, ...costs[name] }
+        }
+      }
+
+      onLoadOutputs?.(outputs, formattedCosts, pipelineStatus)
+    } catch {
+      // best-effort — form fields are already loaded
+    }
   }
 
   const handleDelete = async (id) => {
@@ -198,7 +232,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
             style={styles.input}
             type="text"
             value={projectName}
-            onChange={(e) => setProjectName(e.target.value)}
+            onChange={(e) => { setProjectName(e.target.value); onProjectIdChange?.(null) }}
             required
           />
         </div>
@@ -214,7 +248,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
                   ...styles.presetBtn,
                   ...(coordinates === loc.coordinates ? styles.presetBtnActive : {}),
                 }}
-                onClick={() => setCoordinates(loc.coordinates)}
+                onClick={() => { setCoordinates(loc.coordinates); onProjectIdChange?.(null) }}
               >
                 {loc.label}
               </button>
@@ -224,7 +258,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
             style={styles.input}
             type="text"
             value={coordinates}
-            onChange={(e) => setCoordinates(e.target.value)}
+            onChange={(e) => { setCoordinates(e.target.value); onProjectIdChange?.(null) }}
             placeholder="40.4406, -79.9959"
             required
           />
@@ -239,7 +273,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
             style={{ ...styles.input, ...styles.textarea }}
             rows={5}
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => { setDescription(e.target.value); onProjectIdChange?.(null) }}
             required
           />
         </div>
