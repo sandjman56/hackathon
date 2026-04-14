@@ -191,6 +191,9 @@ def upsert_ecfr_source(
     On update, refreshes bytes / sha256 / size_bytes / uploaded_at / status
     while preserving the row id (so cascade_delete_chunks can clear stale
     chunks in-place).
+
+    Note: the ``ON CONFLICT (cols) WHERE source_type = 'ecfr'`` clause
+    (inference against a partial unique index) requires PostgreSQL 15+.
     """
     sha = hashlib.sha256(bytes_).hexdigest()
     size = len(bytes_)

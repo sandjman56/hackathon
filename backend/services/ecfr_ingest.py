@@ -70,6 +70,11 @@ def ingest_ecfr_source(
     """Fetch eCFR XML, upsert source row, run ingest pipeline.
 
     Returns the source_id (UUID) of the created or updated source row.
+
+    The connection MUST be writable. Callers invoking this from HTTP
+    handlers should pass a fresh connection (NOT the request connection)
+    so background work doesn't interfere with request lifecycle. This
+    mirrors the contract of ``services.regulatory_ingest.ingest_source_sync``.
     """
     cid = correlation_id or uuid.uuid4().hex[:8]
     t_start = time.time()
@@ -104,13 +109,20 @@ def ingest_ecfr_source(
                 client=client, correlation_id=cid,
             )
         except Exception as exc:
-            _log_audit(
-                conn, correlation_id=cid, source_id=None, trigger=trigger,
-                cfr_title=title, cfr_part=part, effective_date=effective_date_row,
-                status="failed",
-                duration_ms=int((time.time() - t_start) * 1000),
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
+            # Guard the audit write so a log-table failure doesn't shadow
+            # the original fetch exception in the traceback.
+            try:
+                _log_audit(
+                    conn, correlation_id=cid, source_id=None, trigger=trigger,
+                    cfr_title=title, cfr_part=part, effective_date=effective_date_row,
+                    status="failed",
+                    duration_ms=int((time.time() - t_start) * 1000),
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                logger.exception(
+                    "[cid=%s] audit-log write failed after fetch error", cid
+                )
             raise
 
     # 4. Upsert source row.
@@ -125,38 +137,55 @@ def ingest_ecfr_source(
     conn.commit()
     logger.info("[cid=%s] upserted source_id=%s", cid, source_id)
 
-    # 5. Run shared ingest pipeline.
-    try:
-        ingest_source_sync(
-            conn,
-            source_id=source_id,
-            embedding_provider=embedding_provider,
-            correlation_id=cid,
-        )
-    except Exception as exc:
-        _log_audit(
-            conn, correlation_id=cid, source_id=source_id, trigger=trigger,
-            cfr_title=title, cfr_part=part, effective_date=effective_date_row,
-            status="failed",
-            duration_ms=int((time.time() - t_start) * 1000),
-            error_message=f"{type(exc).__name__}: {exc}",
-        )
-        raise
+    # 5. Run shared ingest pipeline. (This swallows exceptions internally
+    #    and records failures on regulatory_sources.status, so we inspect
+    #    the row afterwards to determine the true outcome.)
+    ingest_source_sync(
+        conn,
+        source_id=source_id,
+        embedding_provider=embedding_provider,
+        correlation_id=cid,
+    )
 
-    # 6. Completion audit row.
+    # 6. Read final source row to determine outcome + chunks_count.
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT chunk_count FROM regulatory_sources WHERE id=%s",
+            "SELECT status, status_message, chunk_count "
+            "FROM regulatory_sources WHERE id=%s",
             (source_id,),
         )
         row = cur.fetchone()
-    chunks_count = int(row[0]) if row and row[0] is not None else None
+    final_status = row[0] if row else None
+    status_message = row[1] if row else None
+    chunks_count = int(row[2]) if row and row[2] is not None else None
 
-    _log_audit(
-        conn, correlation_id=cid, source_id=source_id, trigger=trigger,
-        cfr_title=title, cfr_part=part, effective_date=effective_date_row,
-        status="ready",
-        duration_ms=int((time.time() - t_start) * 1000),
-        chunks_count=chunks_count,
-    )
+    # 7. Terminal audit row reflecting the real outcome. Guard the audit
+    #    write so a log-table failure doesn't shadow the pipeline result.
+    if final_status == "failed":
+        try:
+            _log_audit(
+                conn, correlation_id=cid, source_id=source_id, trigger=trigger,
+                cfr_title=title, cfr_part=part, effective_date=effective_date_row,
+                status="failed",
+                duration_ms=int((time.time() - t_start) * 1000),
+                chunks_count=chunks_count,
+                error_message=status_message,
+            )
+        except Exception:
+            logger.exception(
+                "[cid=%s] audit-log write failed after pipeline failure", cid
+            )
+    else:
+        try:
+            _log_audit(
+                conn, correlation_id=cid, source_id=source_id, trigger=trigger,
+                cfr_title=title, cfr_part=part, effective_date=effective_date_row,
+                status="ready",
+                duration_ms=int((time.time() - t_start) * 1000),
+                chunks_count=chunks_count,
+            )
+        except Exception:
+            logger.exception(
+                "[cid=%s] audit-log write failed after pipeline success", cid
+            )
     return source_id
