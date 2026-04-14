@@ -12,7 +12,9 @@ would introduce. The constant value must stay in sync with
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+from datetime import date as _date
 from typing import Any, Optional
 
 import psycopg2
@@ -171,6 +173,66 @@ def insert_source(
             raise RuntimeError("insert_source: INSERT ... RETURNING returned no row")
     conn.commit()
     return _normalize(row)
+
+
+def upsert_ecfr_source(
+    conn: Any,
+    *,
+    cfr_title: int,
+    cfr_part: str,
+    effective_date: _date | None,
+    filename: str,
+    bytes_: bytes,
+) -> str:
+    """Insert or update-in-place keyed on (source_type='ecfr', cfr_title,
+    cfr_part, effective_date) via the partial unique index. Returns the
+    row's UUID.
+
+    On update, refreshes bytes / sha256 / size_bytes / uploaded_at / status
+    while preserving the row id (so cascade_delete_chunks can clear stale
+    chunks in-place).
+    """
+    sha = hashlib.sha256(bytes_).hexdigest()
+    size = len(bytes_)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO regulatory_sources
+              (filename, sha256, size_bytes, bytes,
+               source_type, content_type,
+               cfr_title, cfr_part, effective_date,
+               status, is_current)
+            VALUES (%s, %s, %s, %s,
+                    'ecfr', 'application/xml',
+                    %s, %s, %s,
+                    'pending', TRUE)
+            ON CONFLICT (source_type, cfr_title, cfr_part, effective_date)
+              WHERE source_type = 'ecfr'
+              DO UPDATE SET
+                filename       = EXCLUDED.filename,
+                sha256         = EXCLUDED.sha256,
+                size_bytes     = EXCLUDED.size_bytes,
+                bytes          = EXCLUDED.bytes,
+                uploaded_at    = NOW(),
+                status         = 'pending',
+                status_message = NULL,
+                chunks_total   = NULL,
+                chunks_embedded = 0,
+                chunk_count    = 0,
+                sections_count = 0,
+                parser_warnings = 0,
+                embedding_dim  = NULL,
+                embedding_started_at  = NULL,
+                embedding_finished_at = NULL
+            RETURNING id
+            """,
+            (filename, sha, size, psycopg2.Binary(bytes_),
+             cfr_title, cfr_part, effective_date),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("upsert_ecfr_source: no id returned")
+        return str(row[0])
 
 
 def find_by_sha256(conn: Any, sha256: str) -> Optional[dict]:
