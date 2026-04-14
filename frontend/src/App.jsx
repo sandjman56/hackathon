@@ -71,7 +71,7 @@ function App() {
       return
     }
 
-    if (cmd.startsWith('/ingest-ecfr')) {
+    if (cmd === '/ingest-ecfr' || cmd.startsWith('/ingest-ecfr ')) {
       await runEcfrIngestCommand(cmd, handleLog)
       return
     }

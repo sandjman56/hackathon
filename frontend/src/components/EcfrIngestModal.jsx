@@ -4,19 +4,49 @@ const apiBase = import.meta.env.VITE_API_URL ?? ''
 const POLL_MS = 3000
 const POLL_TIMEOUT_MS = 10 * 60 * 1000
 
+async function fetchMatchingSource(title, part) {
+  const res = await fetch(`${apiBase}/api/regulations/sources`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const body = await res.json()
+  return (
+    (body.sources || []).find(
+      (s) => s.cfr_title === title && String(s.cfr_part) === String(part),
+    ) || null
+  )
+}
+
+// A terminal row is "fresh" (belongs to our POST, not the previous ingest)
+// iff its embedding_started_at differs from the pre-POST baseline.
+// upsert_ecfr_source resets embedding_started_at=NULL and update_status bumps
+// it to NOW() on every ingest start, so inequality reliably means new run.
+function isFreshRow(row, baseline) {
+  if (!baseline) return true
+  return row.embedding_started_at !== baseline.embedding_started_at
+}
+
 export default function EcfrIngestModal({ onClose }) {
   const [title, setTitle] = useState('')
   const [part, setPart] = useState('')
   const [date, setDate] = useState('')
-  const [phase, setPhase] = useState('form') // form | starting | polling | ready | failed | error
+  // phase: form | starting | polling | ready | failed | error | cancelled
+  const [phase, setPhase] = useState('form')
   const [msg, setMsg] = useState('')
   const [cid, setCid] = useState(null)
   const [row, setRow] = useState(null)
   const pollRef = useRef(null)
   const deadlineRef = useRef(null)
+  const baselineRef = useRef(null)
+  const isMountedRef = useRef(true)
 
-  useEffect(() => () => {
-    if (pollRef.current) clearInterval(pollRef.current)
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = null
+      deadlineRef.current = null
+      baselineRef.current = null
+    }
   }, [])
 
   const inFlight = phase === 'starting' || phase === 'polling'
@@ -24,12 +54,37 @@ export default function EcfrIngestModal({ onClose }) {
   const formValid =
     Number.isInteger(titleNum) && titleNum >= 1 && titleNum <= 50 && part.trim().length > 0
 
+  const stopPolling = () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = null
+    deadlineRef.current = null
+  }
+
+  const safe = (fn) => {
+    if (isMountedRef.current) fn()
+  }
+
   const start = async () => {
-    setPhase('starting')
-    setMsg('posting to /api/regulations/sources/ecfr…')
-    setRow(null)
+    const partTrim = part.trim()
+    safe(() => {
+      setPhase('starting')
+      setMsg('capturing baseline…')
+      setRow(null)
+    })
+
     try {
-      const body = { title: titleNum, part: part.trim() }
+      baselineRef.current = await fetchMatchingSource(titleNum, partTrim)
+    } catch (e) {
+      safe(() => {
+        setPhase('error')
+        setMsg(`baseline fetch failed: ${e.message}`)
+      })
+      return
+    }
+
+    safe(() => setMsg('posting to /api/regulations/sources/ecfr…'))
+    try {
+      const body = { title: titleNum, part: partTrim }
       if (date.trim()) body.date = date.trim()
       const res = await fetch(`${apiBase}/api/regulations/sources/ecfr`, {
         method: 'POST',
@@ -38,62 +93,81 @@ export default function EcfrIngestModal({ onClose }) {
       })
       if (!res.ok) {
         const text = await res.text()
-        setPhase('error')
-        setMsg(`HTTP ${res.status}: ${text || res.statusText}`)
+        safe(() => {
+          setPhase('error')
+          setMsg(`HTTP ${res.status}: ${text || res.statusText}`)
+        })
         return
       }
       const data = await res.json()
-      setCid(data.correlation_id || null)
-      setPhase('polling')
-      setMsg(`accepted cid=${data.correlation_id || '?'} — polling every ${POLL_MS / 1000}s`)
+      safe(() => {
+        setCid(data.correlation_id || null)
+        setPhase('polling')
+        setMsg(`accepted cid=${data.correlation_id || '?'} — polling every ${POLL_MS / 1000}s`)
+      })
       deadlineRef.current = Date.now() + POLL_TIMEOUT_MS
-      pollRef.current = setInterval(() => pollOnce(titleNum, part.trim()), POLL_MS)
-      // kick one poll immediately so the user sees the first status
-      pollOnce(titleNum, part.trim())
+      pollRef.current = setInterval(() => pollOnce(titleNum, partTrim), POLL_MS)
+      pollOnce(titleNum, partTrim)
     } catch (e) {
-      setPhase('error')
-      setMsg(`network error: ${e.message}`)
+      safe(() => {
+        setPhase('error')
+        setMsg(`network error: ${e.message}`)
+      })
     }
   }
 
   const pollOnce = async (t, p) => {
+    // Late tick after cleanup or cancel — deadlineRef is nulled in those paths.
+    if (deadlineRef.current == null) return
     if (Date.now() > deadlineRef.current) {
-      clearInterval(pollRef.current)
-      pollRef.current = null
-      setPhase('error')
-      setMsg(`timed out after ${POLL_TIMEOUT_MS / 1000}s — check regulatory_ingest_log`)
+      stopPolling()
+      safe(() => {
+        setPhase('error')
+        setMsg(`timed out after ${POLL_TIMEOUT_MS / 1000}s — check regulatory_ingest_log`)
+      })
       return
     }
     try {
-      const res = await fetch(`${apiBase}/api/regulations/sources`)
-      if (!res.ok) return
-      const body = await res.json()
-      const match = (body.sources || []).find(
-        (s) => s.cfr_title === t && String(s.cfr_part) === String(p),
-      )
+      const match = await fetchMatchingSource(t, p)
       if (!match) return
-      setRow(match)
+      safe(() => setRow(match))
+      if (!isFreshRow(match, baselineRef.current)) {
+        safe(() =>
+          setMsg(`status=${match.status} (stale) — waiting for re-ingest to begin…`),
+        )
+        return
+      }
       if (match.status === 'ready') {
-        clearInterval(pollRef.current)
-        pollRef.current = null
-        setPhase('ready')
-        setMsg(`ready — ${match.chunk_count ?? 0} chunks stored`)
+        stopPolling()
+        safe(() => {
+          setPhase('ready')
+          setMsg(`ready — ${match.chunk_count ?? 0} chunks stored`)
+        })
       } else if (match.status === 'failed') {
-        clearInterval(pollRef.current)
-        pollRef.current = null
-        setPhase('failed')
-        setMsg(`failed — ${match.error_message || 'see regulatory_ingest_log'}`)
+        stopPolling()
+        safe(() => {
+          setPhase('failed')
+          setMsg(`failed — ${match.error_message || 'see regulatory_ingest_log'}`)
+        })
       } else {
-        setMsg(`status=${match.status} — still working…`)
+        safe(() => setMsg(`status=${match.status} — still working…`))
       }
     } catch {
       // transient; next tick retries
     }
   }
 
+  const cancel = () => {
+    stopPolling()
+    safe(() => {
+      setPhase('cancelled')
+      setMsg('cancelled locally — backend ingest continues; reopen to resume polling')
+    })
+  }
+
   const handleClose = () => {
     if (inFlight) return
-    if (pollRef.current) clearInterval(pollRef.current)
+    stopPolling()
     onClose()
   }
 
@@ -151,13 +225,24 @@ export default function EcfrIngestModal({ onClose }) {
             />
           </label>
 
-          <button
-            style={{ ...styles.startBtn, ...(formValid && !inFlight ? {} : styles.startBtnDisabled) }}
-            onClick={start}
-            disabled={!formValid || inFlight}
-          >
-            {inFlight ? 'WORKING…' : phase === 'ready' || phase === 'failed' || phase === 'error' ? 'START AGAIN' : 'START INGEST'}
-          </button>
+          <div style={styles.btnRow}>
+            <button
+              style={{ ...styles.startBtn, ...(formValid && !inFlight ? {} : styles.startBtnDisabled) }}
+              onClick={start}
+              disabled={!formValid || inFlight}
+            >
+              {inFlight
+                ? 'WORKING…'
+                : phase === 'ready' || phase === 'failed' || phase === 'error' || phase === 'cancelled'
+                  ? 'START AGAIN'
+                  : 'START INGEST'}
+            </button>
+            {phase === 'polling' && (
+              <button style={styles.cancelBtn} onClick={cancel}>
+                CANCEL
+              </button>
+            )}
+          </div>
 
           {phase !== 'form' && (
             <div style={{ ...styles.status, ...phaseStyle(phase) }}>
@@ -202,6 +287,7 @@ export default function EcfrIngestModal({ onClose }) {
 function phaseStyle(phase) {
   if (phase === 'ready') return { borderColor: 'var(--green-primary)', color: 'var(--green-primary)' }
   if (phase === 'failed' || phase === 'error') return { borderColor: '#ff4444', color: '#ff4444' }
+  if (phase === 'cancelled') return { borderColor: '#888', color: '#888' }
   return { borderColor: '#ffaa00', color: '#ffaa00' }
 }
 
@@ -232,13 +318,21 @@ const styles = {
     borderRadius: '4px', padding: '8px 10px', color: 'var(--text-primary)',
     fontFamily: 'var(--font-mono)', fontSize: '12px', outline: 'none',
   },
+  btnRow: { display: 'flex', gap: '8px', marginTop: '4px' },
   startBtn: {
+    flex: 1,
     background: 'var(--green-dim)', color: 'var(--green-primary)',
     border: '1px solid var(--green-primary)', borderRadius: '4px',
     padding: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px',
-    letterSpacing: '2px', cursor: 'pointer', marginTop: '4px',
+    letterSpacing: '2px', cursor: 'pointer',
   },
   startBtnDisabled: { opacity: 0.4, cursor: 'not-allowed' },
+  cancelBtn: {
+    background: 'transparent', color: '#ff4444',
+    border: '1px solid #ff4444', borderRadius: '4px',
+    padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: '11px',
+    letterSpacing: '2px', cursor: 'pointer',
+  },
   status: {
     border: '1px solid var(--border)', borderRadius: '4px',
     padding: '10px', display: 'flex', flexDirection: 'column', gap: '4px',
