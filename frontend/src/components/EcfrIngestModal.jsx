@@ -129,6 +129,9 @@ export default function EcfrIngestModal({ onClose }) {
     }
     try {
       const match = await fetchMatchingSource(t, p)
+      // Cancelled or unmounted while the fetch was in flight — don't let a
+      // late response overwrite the 'cancelled' phase with ready/failed.
+      if (deadlineRef.current == null) return
       if (!match) return
       safe(() => setRow(match))
       if (!isFreshRow(match, baselineRef.current)) {
