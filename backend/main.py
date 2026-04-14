@@ -480,8 +480,8 @@ def _run_ecfr_ingest_background(
     try:
         conn = _get_connection()
     except Exception:
-        logger.exception(
-            "[cid=%s] eCFR ingest failed to open DB connection",
+        _sources_logger.exception(
+            "[sources:%s] eCFR ingest failed to open DB connection",
             correlation_id,
         )
         return
@@ -494,15 +494,17 @@ def _run_ecfr_ingest_background(
             trigger="api",
         )
     except Exception:
-        logger.exception(
-            "[cid=%s] eCFR ingest raised in background task",
+        _sources_logger.exception(
+            "[sources:%s] eCFR ingest raised in background task",
             correlation_id,
         )
     finally:
         try:
             conn.close()
         except Exception:
-            logger.exception("[cid=%s] conn.close() raised", correlation_id)
+            _sources_logger.exception(
+                "[sources:%s] conn.close() raised", correlation_id,
+            )
 
 
 @app.post("/api/regulations/sources/ecfr", status_code=202)

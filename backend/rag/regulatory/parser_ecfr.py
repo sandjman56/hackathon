@@ -239,8 +239,11 @@ def _citation(
 
 def _strip_section_prefix(head: str, n: str) -> str:
     # Heading looks like "§ 800.3  Initiation of the section 106 process."
+    # Only the two §-prefixed forms are observed in eCFR responses; the bare
+    # ``n`` form is not a fallback — it would incorrectly eat a legitimate
+    # section number that happens to be a prefix (e.g. n="800" → "800.3").
     head = head.strip()
-    markers = (f"§ {n}", f"§{n}", n)
+    markers = (f"§ {n}", f"§{n}")
     for m in markers:
         if head.startswith(m):
             return head[len(m):].lstrip(" .\u00a0\t").strip()
