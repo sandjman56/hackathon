@@ -43,7 +43,12 @@ _LIST_COLUMNS = """
     embedding_dim,
     embedding_started_at,
     embedding_finished_at,
-    is_current
+    is_current,
+    source_type,
+    content_type,
+    effective_date,
+    cfr_title,
+    cfr_part
 """
 
 

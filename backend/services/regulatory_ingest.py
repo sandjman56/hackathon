@@ -16,6 +16,7 @@ import pymupdf
 
 from db.regulatory_sources import (
     cascade_delete_chunks,
+    get_source_by_id,
     get_source_bytes,
     update_progress,
     update_status,
@@ -89,7 +90,6 @@ def ingest_source_sync(
         update_status(conn, source_id, status="embedding",
                       started_at_now=True)
 
-        from db.regulatory_sources import get_source_by_id
         row = get_source_by_id(conn, source_id)
         if row is None:
             raise RuntimeError(f"source row not found: {source_id}")
