@@ -37,23 +37,33 @@ _PROGRESS_MIN_INTERVAL_S = 1.0
 _PROGRESS_MIN_DELTA = 5
 
 
-def detect_parser(blob: bytes) -> str:
-    """Sniff the first page of a PDF to pick the right parser.
+def detect_parser(blob: bytes, *, content_type: str) -> str:
+    """Route bytes to the right parser based on content_type.
+
+    EXTENSION POINT: add new content_type branches here.
+    Pattern: see parser_ecfr.py for the XML reference implementation.
+    See docs/ingest-ecfr.md 'Adding a new source type' for the procedure.
 
     Returns:
-        ``"pa_code"`` for PA Code browser-printed PDFs,
-        ``"federal"`` for NEPA/CFR-style scanned reprints.
+        ``"ecfr_xml"`` for eCFR Versioner XML responses,
+        ``"pa_code"`` for Pennsylvania Code browser-printed PDFs,
+        ``"federal"`` for NEPA/CFR-style scanned PDF reprints.
     """
-    try:
-        doc = pymupdf.open(stream=blob, filetype="pdf")
-        first_page_text = doc[0].get_text("text") if len(doc) > 0 else ""
-        doc.close()
-    except Exception:
+    if content_type == "application/xml":
+        return "ecfr_xml"
+
+    if content_type == "application/pdf":
+        try:
+            doc = pymupdf.open(stream=blob, filetype="pdf")
+            first_page_text = doc[0].get_text("text") if len(doc) > 0 else ""
+            doc.close()
+        except Exception:
+            return "federal"
+        if "Pennsylvania Code" in first_page_text:
+            return "pa_code"
         return "federal"
 
-    if "Pennsylvania Code" in first_page_text:
-        return "pa_code"
-    return "federal"
+    raise ValueError(f"unsupported content_type: {content_type!r}")
 
 
 def ingest_source_sync(
