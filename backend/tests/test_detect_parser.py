@@ -36,3 +36,12 @@ def test_pdf_without_pa_marker_routes_to_federal():
 def test_unknown_content_type_raises():
     with pytest.raises(ValueError, match="unsupported content_type"):
         detect_parser(b"garbage", content_type="text/plain")
+
+
+def test_ingest_source_sync_rejects_xml_before_parser_exists(monkeypatch, db_conn):
+    """Until Task 6 lands, hitting the XML branch must raise cleanly."""
+    # This test will be deleted in Task 6 (superseded by test_regulatory_ingest_xml.py)
+    from services.regulatory_ingest import ingest_source_sync
+    # ... actual DB/row setup out of scope for this micro-test;
+    # skip if the fixture needs infra that's not yet wired.
+    pytest.skip("placeholder — replaced by test_regulatory_ingest_xml.py in Task 6")

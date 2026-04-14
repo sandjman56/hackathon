@@ -89,16 +89,26 @@ def ingest_source_sync(
         update_status(conn, source_id, status="embedding",
                       started_at_now=True)
 
+        from db.regulatory_sources import get_source_by_id
+        row = get_source_by_id(conn, source_id)
+        if row is None:
+            raise RuntimeError(f"source row not found: {source_id}")
+        content_type = row.get("content_type") or "application/pdf"
+
         blob = get_source_bytes(conn, source_id)
         if blob is None:
-            raise RuntimeError(f"source row not found: {source_id}")
+            raise RuntimeError(f"source bytes missing: {source_id}")
 
-        parser_type = detect_parser(blob)
-        log("detected parser: %s, %d bytes", parser_type, len(blob))
+        parser_type = detect_parser(blob, content_type=content_type)
+        log("detected parser: %s (content_type=%s, %d bytes)",
+            parser_type, content_type, len(blob))
         t0 = time.time()
-        if parser_type == "pa_code":
+        if parser_type == "ecfr_xml":
+            from rag.regulatory.parser_ecfr import parse_ecfr_xml
+            sections, parser_warnings = parse_ecfr_xml(blob)
+        elif parser_type == "pa_code":
             sections, parser_warnings = parse_pa_code_pdf(blob)
-        else:
+        else:  # "federal"
             sections, parser_warnings = parse_pdf(blob)
         log("parse done: %d sections, %d warnings in %.2fs",
             len(sections), len(parser_warnings), time.time() - t0)
@@ -163,10 +173,6 @@ def ingest_source_sync(
 
         # Build rows + upsert
         init_regulatory_table(conn, embedding_dim=dim)
-        from db.regulatory_sources import get_source_by_id
-        row = get_source_by_id(conn, source_id)
-        if row is None:
-            raise RuntimeError(f"row vanished mid-ingest: {source_id}")
         rows = []
         for chunk, (breadcrumb, vec) in zip(chunks, embeddings):
             meta = build_metadata(
