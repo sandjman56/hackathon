@@ -321,6 +321,68 @@ def get_regulatory_source(source_id: str):
         conn.close()
 
 
+@app.get("/api/regulations/sources/{source_id}/chunks")
+def get_regulatory_source_chunks(
+    source_id: str,
+    page: int = 1,
+    per_page: int = 25,
+):
+    """Paginated, untruncated chunks for one source, sorted by id."""
+    per_page = max(1, min(per_page, 200))
+    page = max(1, page)
+    offset = (page - 1) * per_page
+
+    conn = _get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM regulatory_sources WHERE id = %s",
+                (source_id,),
+            )
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=404, detail="source not found")
+
+            cur.execute(
+                "SELECT COUNT(*) FROM regulatory_chunks WHERE source_id = %s",
+                (source_id,),
+            )
+            (total,) = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT id, content, metadata
+                  FROM regulatory_chunks
+                 WHERE source_id = %s
+                 ORDER BY id
+                 LIMIT %s OFFSET %s
+                """,
+                (source_id, per_page, offset),
+            )
+            chunks = [
+                {
+                    "id": str(row[0]),
+                    "content": row[1],
+                    "metadata": row[2] or {},
+                    "citation": (row[2] or {}).get("citation"),
+                    "breadcrumb": (row[2] or {}).get("breadcrumb"),
+                    "token_count": (row[2] or {}).get("token_count"),
+                }
+                for row in cur.fetchall()
+            ]
+    finally:
+        conn.close()
+
+    total_pages = (total + per_page - 1) // per_page if total else 0
+    return {
+        "source_id": source_id,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "chunks": chunks,
+    }
+
+
 def _run_ingest_background(source_id: str, correlation_id: str):
     """Background task entrypoint. Opens its own DB connection."""
     conn = _get_connection()
