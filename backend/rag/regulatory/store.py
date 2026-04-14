@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 import psycopg2
@@ -219,6 +220,28 @@ def build_metadata(
 
 # --- writes ---------------------------------------------------------------
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _source_id_for_fk(val: Any) -> Optional[str]:
+    """Return ``val`` if it parses as a UUID; else ``None``.
+
+    ``regulatory_chunks.source_id`` is a ``UUID REFERENCES
+    regulatory_sources(id)`` column. Production callers pass the real source
+    row id (a valid UUID). Some integration tests pass placeholder strings
+    like ``"test-id-000"`` — those must be silently demoted to NULL so the
+    INSERT doesn't fail on cast. The original value is still preserved
+    inside the ``metadata`` JSONB for downstream readers.
+    """
+    if val is None:
+        return None
+    s = str(val)
+    return s if _UUID_RE.match(s) else None
+
+
 def upsert_chunks(
     conn: Any,
     rows: list[tuple[Chunk, str, list[float], dict]],
@@ -229,6 +252,10 @@ def upsert_chunks(
     Args:
         conn: psycopg2 connection.
         rows: Iterable of ``(chunk, breadcrumb, embedding, metadata)``.
+            The metadata dict is expected to carry ``source_id`` — the
+            typed FK column is populated from it so SQL-level
+            ``ON DELETE CASCADE`` and the ``/sources/{id}/chunks`` endpoint
+            both work without waiting for the startup backfill.
         table_name: Target table.
 
     Returns:
@@ -242,12 +269,13 @@ def upsert_chunks(
             chunk.body,
             breadcrumb,
             json.dumps(meta),
+            _source_id_for_fk(meta.get("source_id")),
         )
         for chunk, breadcrumb, emb, meta in rows
     ]
     sql = f"""
-        INSERT INTO {table_name} (embedding, content, breadcrumb, metadata)
-        VALUES (%s::vector, %s, %s, %s::jsonb)
+        INSERT INTO {table_name} (embedding, content, breadcrumb, metadata, source_id)
+        VALUES (%s::vector, %s, %s, %s::jsonb, %s)
         ON CONFLICT (
             (metadata->>'citation'),
             (metadata->>'chunk_index'),
@@ -258,6 +286,7 @@ def upsert_chunks(
             content    = EXCLUDED.content,
             breadcrumb = EXCLUDED.breadcrumb,
             metadata   = EXCLUDED.metadata,
+            source_id  = EXCLUDED.source_id,
             created_at = NOW();
     """
     with conn.cursor() as cur:
