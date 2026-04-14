@@ -29,6 +29,7 @@ export default function DatabaseView({ onBack }) {
   if (selectedTable) {
     return (
       <TableDetail
+        key={selectedTable}
         tableName={selectedTable}
         onBack={() => setSelectedTable(null)}
       />

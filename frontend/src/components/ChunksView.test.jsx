@@ -88,6 +88,7 @@ describe('ChunksView', () => {
   it('pressing BACK calls the provided callback', async () => {
     const onBack = vi.fn();
     render(<ChunksView onBack={onBack} />);
+    await screen.findByRole('combobox');
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
     expect(onBack).toHaveBeenCalled();
   });

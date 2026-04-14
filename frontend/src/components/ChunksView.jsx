@@ -22,19 +22,31 @@ export default function ChunksView({ onBack }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setError(null);
     fetch(`${apiBase}/api/regulations/sources`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('list failed'))))
-      .then((body) => setSources(body.sources || []))
-      .catch((e) => setError(e.message));
+      .then((body) => { if (!cancelled) setSources(body.sources || []); })
+      .catch((e) => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
     if (filter === FILTER_ALL) {
       // Fall back to generic table endpoint for "All sources"
-      setLoading(true);
       fetch(`${apiBase}/api/db/tables/regulatory_chunks?page=${page}&per_page=${PER_PAGE}`)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('load failed'))))
         .then((raw) => {
+          if (cancelled) return;
+          const contentIdx = raw.columns?.findIndex((c) => c.name === 'content') ?? -1;
+          const metadataIdx = raw.columns?.findIndex((c) => c.name === 'metadata') ?? -1;
+          if (contentIdx < 0 || metadataIdx < 0) {
+            setError('unexpected schema from /api/db/tables/regulatory_chunks');
+            return;
+          }
           // Adapt generic shape to per-source shape so render is uniform
           setData({
             source_id: null,
@@ -44,24 +56,24 @@ export default function ChunksView({ onBack }) {
             total_pages: raw.total_pages,
             chunks: (raw.rows || []).map((row, idx) => ({
               id: `row-${raw.page}-${idx}`,
-              content: row[raw.columns.findIndex((c) => c.name === 'content')] || '',
-              metadata: row[raw.columns.findIndex((c) => c.name === 'metadata')] || {},
+              content: row[contentIdx] || '',
+              metadata: row[metadataIdx] || {},
               citation: null,
               breadcrumb: null,
               token_count: null,
             })),
           });
         })
-        .catch((e) => setError(e.message))
-        .finally(() => setLoading(false));
-      return;
+        .catch((e) => { if (!cancelled) setError(e.message); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+      return () => { cancelled = true; };
     }
-    setLoading(true);
     fetch(`${apiBase}/api/regulations/sources/${filter}/chunks?page=${page}&per_page=${PER_PAGE}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('load failed'))))
-      .then(setData)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .then((x) => { if (!cancelled) setData(x); })
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [filter, page]);
 
   function toggle(id) {
@@ -81,7 +93,6 @@ export default function ChunksView({ onBack }) {
         <label htmlFor="src-filter" style={{ marginLeft: 'auto' }}>source:</label>
         <select
           id="src-filter"
-          role="combobox"
           value={filter}
           onChange={(e) => { setFilter(e.target.value); setPage(1); setExpanded(new Set()); }}
         >
@@ -100,14 +111,22 @@ export default function ChunksView({ onBack }) {
         return (
           <div
             key={ch.id}
-            role="row"
+            role="button"
+            tabIndex={0}
+            aria-expanded={isOpen}
             style={{ borderTop: '1px solid var(--border)', padding: '8px 0', cursor: 'pointer' }}
             onClick={() => toggle(ch.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle(ch.id);
+              }
+            }}
           >
             <div>
               {isOpen ? '▾' : '▸'} {ch.citation || ch.id}
               {ch.breadcrumb ? <span style={{ opacity: 0.7 }}> — {ch.breadcrumb}</span> : null}
-              {ch.token_count ? <span style={{ opacity: 0.7 }}> • {ch.token_count} tokens</span> : null}
+              {ch.token_count != null ? <span style={{ opacity: 0.7 }}> • {ch.token_count} tokens</span> : null}
             </div>
             {isOpen && (
               <pre style={{
