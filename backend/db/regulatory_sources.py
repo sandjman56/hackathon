@@ -48,7 +48,20 @@ _LIST_COLUMNS = """
 
 
 def init_regulatory_sources_table(conn: Any) -> None:
-    """Create the table, its indexes, and Phase 1 eCFR columns if missing. Idempotent."""
+    """Provision regulatory schema: sources table and ingest audit log.
+
+    Creates (all idempotent):
+      * ``regulatory_sources`` with its indexes and the Phase 1 eCFR
+        columns (``source_type``, ``content_type``, ``effective_date``,
+        ``cfr_title``, ``cfr_part``) plus the partial unique index
+        scoped to ``source_type = 'ecfr'``.
+      * ``regulatory_ingest_log`` — the audit table that records each
+        ingest attempt (trigger, status, duration, chunk counts, errors)
+        along with its supporting indexes.
+
+    The function name is retained for backward compatibility even though
+    its responsibilities now extend beyond the sources table alone.
+    """
     with conn.cursor() as cur:
         cur.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto";')
         cur.execute(

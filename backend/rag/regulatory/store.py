@@ -109,7 +109,8 @@ def init_regulatory_table(
             UPDATE {table_name}
                SET source_id = (metadata->>'source_id')::uuid
              WHERE source_id IS NULL
-               AND metadata ? 'source_id';
+               AND metadata ? 'source_id'
+               AND metadata->>'source_id' ~* '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$';
         """)
         cur.execute(
             f"""

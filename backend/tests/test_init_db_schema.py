@@ -75,4 +75,7 @@ def test_partial_unique_index_exists(fresh_conn, monkeypatch):
         )
         row = cur.fetchone()
     assert row is not None
-    assert "WHERE" in row[0] and "ecfr" in row[0]
+    indexdef = row[0]
+    assert "WHERE" in indexdef, f"partial index missing WHERE clause: {indexdef}"
+    assert "source_type = 'ecfr'" in indexdef, \
+        f"partial index predicate not scoped to source_type = 'ecfr': {indexdef}"
