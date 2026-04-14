@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import TableDetail from './TableDetail.jsx'
+import EcfrIngestModal from './EcfrIngestModal.jsx'
 
 const apiBase = import.meta.env.VITE_API_URL ?? ''
 
@@ -8,6 +9,7 @@ export default function DatabaseView({ onBack }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [selectedTable, setSelectedTable] = useState(null)
+  const [ingestOpen, setIngestOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -46,7 +48,13 @@ export default function DatabaseView({ onBack }) {
         <span style={styles.tableCount}>
           {!loading && !error && `${tables.length} tables`}
         </span>
+        <div style={{ flex: 1 }} />
+        <button style={styles.ingestBtn} onClick={() => setIngestOpen(true)}>
+          INGEST eCFR
+        </button>
       </div>
+
+      {ingestOpen && <EcfrIngestModal onClose={() => setIngestOpen(false)} />}
 
       <div style={styles.body}>
         {loading && <div style={styles.muted}>Loading tables...</div>}
@@ -116,6 +124,17 @@ const styles = {
     border: '1px solid var(--border)',
     borderRadius: '4px',
     padding: '6px 12px',
+    cursor: 'pointer',
+  },
+  ingestBtn: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    letterSpacing: '2px',
+    color: 'var(--green-primary)',
+    background: 'var(--green-dim)',
+    border: '1px solid var(--green-primary)',
+    borderRadius: '4px',
+    padding: '6px 14px',
     cursor: 'pointer',
   },
   pageTitle: {
