@@ -7,7 +7,8 @@ This document covers how to ingest CFR parts from the [eCFR Versioner API](https
 - `DATABASE_URL` set to a Postgres connection string with `CREATE EXTENSION` privileges (pgvector required)
 - `init_db()` applied (happens automatically on backend startup)
 - An embedding provider configured — the backend picks one up via `get_embedding_provider()`
-- Python env from `backend/requirements.txt` installed; `pyyaml` required for batch mode
+- Python env from `backend/requirements.txt` installed (includes `pyyaml`, required by the CLI's YAML loader)
+- `jq` on `$PATH` (used in the verification/poll snippets below)
 
 ## CLI usage
 
@@ -45,7 +46,7 @@ Batch failures do not halt the run. Per-item results print at the end.
 ### Exit codes
 
 - `0` — all ingests succeeded
-- `1` — argparse / environment error
+- `1` — usage error (bad flags or malformed YAML shape)
 - `2` — one or more ingests failed
 
 ## HTTP endpoint usage
@@ -78,11 +79,13 @@ Interactive docs: <http://localhost:8000/docs> (Swagger UI).
 
 ### HTTP error responses
 
+The endpoint schedules ingest as a background task and returns `202` immediately, so most failures surface via the audit log, not the HTTP response.
+
 | Status | Cause |
 |---|---|
-| 422 | Pydantic validation (bad `title`, `part`, or `date` format) |
-| 502 | eCFR API unreachable after retries |
-| 500 | DB error during upsert |
+| 422 | Pydantic validation at request time (bad `title`, `part`, or `date` format) |
+
+Failures that happen *after* the 202 — eCFR API unreachable after retries, DB error during upsert, parse errors — land in `regulatory_ingest_log` with `status='failed'`. Check the `correlation_id` from the response body against that table to see what happened.
 
 ## How to verify an ingest succeeded
 
@@ -105,7 +108,7 @@ Re-running with the same `(title, part, date)` tuple **updates the existing row 
 | 404 from eCFR on a `current` fetch | The date-resolution spike returned an invalid date, or `content_versions` is empty | Run `resolve_current_date` manually in a Python shell; check the Versioner API response |
 | `unexpected content-type` RuntimeError | eCFR returned HTML (maintenance page or rate limit) | Retry after a minute; the client already retries 2× automatically |
 | Sections count = 0 | Part number doesn't exist in that title at that date | Verify with `curl https://www.ecfr.gov/api/versioner/v1/titles.json` |
-| FK violation on `regulatory_chunks.source_id` | Pre-Phase-1 row in `regulatory_chunks` with no typed `source_id` | Re-run `init_db()`; the backfill is idempotent |
+| FK violation on `regulatory_chunks.source_id` | Legacy `regulatory_chunks` row whose `source_id` doesn't reference a `regulatory_sources` entry | Restart the backend — `init_db()` runs on startup and its backfill is idempotent |
 
 ## Adding a new source type (Phase 2+)
 
