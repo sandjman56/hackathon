@@ -48,7 +48,7 @@ _LIST_COLUMNS = """
 
 
 def init_regulatory_sources_table(conn: Any) -> None:
-    """Create the table and its indexes if missing. Idempotent."""
+    """Create the table, its indexes, and Phase 1 eCFR columns if missing. Idempotent."""
     with conn.cursor() as cur:
         cur.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto";')
         cur.execute(
@@ -77,6 +77,48 @@ def init_regulatory_sources_table(conn: Any) -> None:
         cur.execute(
             f"CREATE INDEX IF NOT EXISTS {TABLE}_status_idx ON {TABLE} (status);"
         )
+
+        # ---- Phase 1 eCFR schema additions ----
+        cur.execute(f"""
+            ALTER TABLE {TABLE}
+              ADD COLUMN IF NOT EXISTS source_type    TEXT NOT NULL DEFAULT 'pdf_upload',
+              ADD COLUMN IF NOT EXISTS content_type   TEXT NOT NULL DEFAULT 'application/pdf',
+              ADD COLUMN IF NOT EXISTS effective_date DATE NULL,
+              ADD COLUMN IF NOT EXISTS cfr_title      INT  NULL,
+              ADD COLUMN IF NOT EXISTS cfr_part       TEXT NULL;
+        """)
+        # Partial unique index: only eCFR sources use tuple identity; PDF
+        # uploads continue using the sha256 unique constraint.
+        cur.execute(f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS {TABLE}_identity_idx
+              ON {TABLE} (source_type, cfr_title, cfr_part, effective_date)
+              WHERE source_type = 'ecfr';
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS regulatory_ingest_log (
+              id             BIGSERIAL PRIMARY KEY,
+              ts             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              correlation_id TEXT NOT NULL,
+              source_id      UUID NULL REFERENCES regulatory_sources(id) ON DELETE SET NULL,
+              trigger        TEXT NOT NULL,
+              source_type    TEXT NOT NULL,
+              cfr_title      INT NULL,
+              cfr_part       TEXT NULL,
+              effective_date DATE NULL,
+              status         TEXT NOT NULL,
+              duration_ms    INT NULL,
+              chunks_count   INT NULL,
+              error_message  TEXT NULL
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS regulatory_ingest_log_ts_idx
+              ON regulatory_ingest_log (ts DESC);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS regulatory_ingest_log_source_idx
+              ON regulatory_ingest_log (source_id);
+        """)
     conn.commit()
     logger.info("Initialized %s", TABLE)
 

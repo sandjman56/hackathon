@@ -93,6 +93,24 @@ def init_regulatory_table(
             );
             """
         )
+        # Phase 1: promote source_id from metadata JSONB to typed UUID FK column.
+        # ON DELETE CASCADE keeps chunks in sync when a source row is removed.
+        cur.execute(f"""
+            ALTER TABLE {table_name}
+              ADD COLUMN IF NOT EXISTS source_id UUID NULL
+                REFERENCES regulatory_sources(id) ON DELETE CASCADE;
+        """)
+        cur.execute(f"""
+            CREATE INDEX IF NOT EXISTS {table_name}_source_id_idx
+              ON {table_name} (source_id);
+        """)
+        # One-time backfill from pre-Phase-1 rows (no-op on fresh install).
+        cur.execute(f"""
+            UPDATE {table_name}
+               SET source_id = (metadata->>'source_id')::uuid
+             WHERE source_id IS NULL
+               AND metadata ? 'source_id';
+        """)
         cur.execute(
             f"""
             CREATE UNIQUE INDEX IF NOT EXISTS {table_name}_dedupe_idx
