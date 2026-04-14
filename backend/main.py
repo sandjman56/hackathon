@@ -29,6 +29,7 @@ from db.regulatory_sources import (
     delete_source,
 )
 from services.regulatory_ingest import ingest_source_sync
+from services.ecfr_ingest import ingest_ecfr_source
 from services.export_report import generate_pdf, generate_latex
 from rag.regulatory.store import init_regulatory_table
 from rag.regulatory.embedder import detect_embedding_dimension
@@ -397,6 +398,66 @@ async def upload_regulatory_source(
         _sources_logger.info("[sources:%s] dedup hit, already ready, no ingest", cid)
 
     return row
+
+
+class EcfrIngestRequest(BaseModel):
+    """Request body for POST /api/regulations/sources/ecfr."""
+    title: int = Field(
+        ..., ge=1, le=50,
+        description="CFR title number (1–50). Example: 36 for 36 CFR.",
+    )
+    part: str = Field(
+        ..., min_length=1, max_length=20,
+        description="CFR part identifier. String, not int, because parts can have suffixes.",
+    )
+    date: str | None = Field(
+        default="current",
+        pattern=r"^(current|\d{4}-\d{2}-\d{2})$",
+        description=(
+            "Version to fetch. 'current' (default) resolves to the latest valid "
+            "amendment date. An ISO date fetches the snapshot from that date."
+        ),
+    )
+
+
+def _run_ecfr_ingest_background(
+    *, title: int, part: str, date: str, correlation_id: str,
+) -> None:
+    conn = _get_connection()
+    try:
+        ingest_ecfr_source(
+            conn,
+            title=title, part=part, date=date,
+            embedding_provider=app.state.embedding_provider,
+            correlation_id=correlation_id,
+            trigger="api",
+        )
+    finally:
+        conn.close()
+
+
+@app.post("/api/regulations/sources/ecfr", status_code=202)
+async def post_regulatory_source_ecfr(
+    req: EcfrIngestRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Kick off eCFR ingest. Fetch + upsert + embed run in background; response is immediate."""
+    cid = uuid.uuid4().hex[:8]
+
+    background_tasks.add_task(
+        _run_ecfr_ingest_background,
+        title=req.title, part=req.part, date=req.date or "current",
+        correlation_id=cid,
+    )
+    return {
+        "source_id": None,  # filled in on poll once upsert completes
+        "correlation_id": cid,
+        "status": "pending",
+        "message": (
+            f"eCFR ingest started for title {req.title} part {req.part}; "
+            f"poll GET /api/regulations/sources for status."
+        ),
+    }
 
 
 @app.delete("/api/regulations/sources/{source_id}")
