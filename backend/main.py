@@ -31,6 +31,8 @@ from db.regulatory_sources import (
     source_exists,
     count_chunks_for_source,
     list_chunks_for_source,
+    count_chunks_all,
+    list_chunks_all,
 )
 from services.regulatory_ingest import ingest_source_sync
 from services.ecfr_ingest import ingest_ecfr_source
@@ -421,6 +423,31 @@ def get_regulatory_source(source_id: str):
         conn.close()
 
 
+@app.get("/api/regulations/chunks")
+def get_regulatory_chunks_all(page: int = 1, per_page: int = 25):
+    """Paginated chunks across all sources, sorted by id."""
+    per_page = max(1, min(per_page, 200))
+    page = max(1, page)
+    offset = (page - 1) * per_page
+
+    conn = _get_connection()
+    try:
+        total = count_chunks_all(conn)
+        chunks = list_chunks_all(conn, limit=per_page, offset=offset)
+    finally:
+        conn.close()
+
+    total_pages = (total + per_page - 1) // per_page if total else 0
+    return {
+        "source_id": None,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "chunks": chunks,
+    }
+
+
 @app.get("/api/regulations/sources/{source_id}/chunks")
 def get_regulatory_source_chunks(
     source_id: str,
@@ -779,12 +806,28 @@ def list_db_tables():
 
 
 @app.get("/api/db/tables/{table_name}")
-def get_db_table(table_name: str, page: int = 1, per_page: int = 25):
+def get_db_table(
+    table_name: str,
+    page: int = 1,
+    per_page: int = 25,
+    source_id: str | None = None,
+):
     conn = _get_connection()
     try:
         valid_tables = _get_public_tables(conn)
         if table_name not in valid_tables:
             raise HTTPException(status_code=404, detail="Table not found")
+
+        # source_id filter is only meaningful on regulatory_chunks; ignore elsewhere.
+        # Treat empty/whitespace source_id as unset — an empty string against a
+        # UUID column would raise "invalid input syntax for type uuid" → 500.
+        sid = source_id.strip() if isinstance(source_id, str) else None
+        apply_source_filter = bool(sid) and table_name == "regulatory_chunks"
+        where_sql = ""
+        where_params: tuple = ()
+        if apply_source_filter:
+            where_sql = " WHERE source_id = %s"
+            where_params = (sid,)
 
         cur = conn.cursor()
 
@@ -798,8 +841,8 @@ def get_db_table(table_name: str, page: int = 1, per_page: int = 25):
         )
         columns = [{"name": r[0], "type": r[1]} for r in cur.fetchall()]
 
-        # Total row count
-        cur.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+        # Total row count (filtered if applicable)
+        cur.execute(f'SELECT COUNT(*) FROM "{table_name}"{where_sql}', where_params)
         total_rows = cur.fetchone()[0]
 
         # Paginated rows — cast every column to TEXT for JSON safety
@@ -807,8 +850,8 @@ def get_db_table(table_name: str, page: int = 1, per_page: int = 25):
         select_exprs = ", ".join(f'"{c}"::text' for c in col_names)
         offset = (page - 1) * per_page
         cur.execute(
-            f'SELECT {select_exprs} FROM "{table_name}" LIMIT %s OFFSET %s',
-            (per_page, offset),
+            f'SELECT {select_exprs} FROM "{table_name}"{where_sql} LIMIT %s OFFSET %s',
+            where_params + (per_page, offset),
         )
         rows = [list(r) for r in cur.fetchall()]
 

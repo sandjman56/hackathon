@@ -95,6 +95,8 @@ def test_get_chunks_for_source_paginated(client, seed_source):
     c0 = body["chunks"][0]
     assert "content" in c0
     assert "metadata" in c0
+    # Embedded flag present; seed fixture inserts non-null embeddings.
+    assert c0["embedded"] is True
     # Untruncated
     assert len(c0["content"]) > 0
 
@@ -103,3 +105,44 @@ def test_get_chunks_for_unknown_source_returns_404(client):
     bogus = str(uuid.uuid4())
     resp = client.get(f"/api/regulations/sources/{bogus}/chunks")
     assert resp.status_code == 404
+
+
+def test_get_chunks_all_cross_source(client, seed_source):
+    resp = client.get(
+        "/api/regulations/chunks",
+        params={"page": 1, "per_page": 50},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["page"] == 1
+    assert body["per_page"] == 50
+    assert body["total"] >= 3
+    # Every chunk has the expected fields.
+    for ch in body["chunks"]:
+        assert "embedded" in ch
+        assert "source_id" in ch
+    # At least the seeded chunks are present with the fixture's source_id.
+    seeded = [c for c in body["chunks"] if c["source_id"] == seed_source]
+    assert len(seeded) == 3
+    assert all(c["embedded"] is True for c in seeded)
+
+
+def test_db_tables_regulatory_chunks_filters_by_source_id(client, seed_source):
+    # Without filter: should include at least the 3 seeded rows.
+    resp = client.get(
+        "/api/db/tables/regulatory_chunks",
+        params={"page": 1, "per_page": 50},
+    )
+    assert resp.status_code == 200
+    unfiltered_total = resp.json()["total_rows"]
+    assert unfiltered_total >= 3
+
+    # With filter: exactly the 3 seeded rows.
+    resp = client.get(
+        "/api/db/tables/regulatory_chunks",
+        params={"page": 1, "per_page": 50, "source_id": seed_source},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_rows"] == 3
+    assert len(body["rows"]) == 3

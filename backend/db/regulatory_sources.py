@@ -370,7 +370,7 @@ def list_chunks_for_source(
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, content, metadata
+            SELECT id, content, metadata, (embedding IS NOT NULL) AS embedded
               FROM {CHUNKS_TABLE}
              WHERE source_id = %s
              ORDER BY id
@@ -388,6 +388,54 @@ def list_chunks_for_source(
                 "citation": meta.get("citation"),
                 "breadcrumb": meta.get("breadcrumb"),
                 "token_count": meta.get("token_count"),
+                "embedded": bool(row[3]),
+            })
+        return out
+
+
+def count_chunks_all(conn: Any) -> int:
+    """Return total chunk count across all sources."""
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM {CHUNKS_TABLE};")
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("count_chunks_all: COUNT(*) returned no row")
+        return int(row[0])
+
+
+def list_chunks_all(
+    conn: Any,
+    *,
+    limit: int,
+    offset: int,
+) -> list[dict]:
+    """Return a page of chunks across all sources, sorted by id.
+
+    Shape matches list_chunks_for_source, plus ``source_id``.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, content, metadata, source_id,
+                   (embedding IS NOT NULL) AS embedded
+              FROM {CHUNKS_TABLE}
+             ORDER BY id
+             LIMIT %s OFFSET %s
+            """,
+            (limit, offset),
+        )
+        out: list[dict] = []
+        for row in cur.fetchall():
+            meta = row[2] or {}
+            out.append({
+                "id": str(row[0]),
+                "content": row[1],
+                "metadata": meta,
+                "citation": meta.get("citation"),
+                "breadcrumb": meta.get("breadcrumb"),
+                "token_count": meta.get("token_count"),
+                "source_id": str(row[3]) if row[3] is not None else None,
+                "embedded": bool(row[4]),
             })
         return out
 
