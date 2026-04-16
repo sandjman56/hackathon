@@ -192,7 +192,18 @@ def update_evaluation_progress(conn: Any, eid: int, *, chunks_embedded: int) -> 
     conn.commit()
 
 
-def reset_evaluation_for_reingest(conn: Any, eid: int) -> None:
+def reset_evaluation_for_reingest(conn: Any, eid: int) -> bool:
+    """Atomically transition an evaluation to ``status='pending'``.
+
+    Only succeeds when the current status is ``ready`` or ``failed`` —
+    rows in ``pending`` or ``embedding`` are left untouched. Returns
+    ``True`` when a row transitioned (caller should queue the background
+    task) and ``False`` otherwise (caller should return 409).
+
+    The conditional update closes the TOCTOU window between SELECT and
+    RESET that would otherwise let two parallel reingest requests both
+    queue a background task for the same evaluation.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -205,10 +216,13 @@ def reset_evaluation_for_reingest(conn: Any, eid: int) -> None:
                    started_at = NULL,
                    finished_at = NULL
              WHERE id = %s
+               AND status IN ('ready', 'failed')
             """,
             (eid,),
         )
+        transitioned = cur.rowcount == 1
     conn.commit()
+    return transitioned
 
 
 def mark_stuck_evaluations_failed(conn: Any) -> int:

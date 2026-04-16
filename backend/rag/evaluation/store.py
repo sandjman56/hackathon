@@ -5,6 +5,11 @@ Mirrors rag/regulatory/store.py in shape. Differences:
     (not UUID — evaluations.id is SERIAL).
   * Dedupe key is ``(evaluation_id, chunk_label)``.
   * Search is always scoped to a single evaluation.
+
+The table name is a module constant (``TABLE``); it is never user-reachable
+because we don't accept it as a function parameter. This rules out an entire
+class of SQL-injection bugs given the f-string interpolation used below
+(including the ``DROP TABLE`` path on dim mismatch).
 """
 from __future__ import annotations
 
@@ -19,15 +24,16 @@ from rag.evaluation.chunker import EisChunk
 
 logger = logging.getLogger("eia.rag.evaluation.store")
 
-DEFAULT_TABLE = "evaluation_chunks"
+TABLE = "evaluation_chunks"
 
 
-def init_evaluation_chunks_table(
-    conn: Any,
-    embedding_dim: int,
-    table_name: str = DEFAULT_TABLE,
-) -> None:
-    """Create the table + indexes if missing. Recreate on dim mismatch."""
+def init_evaluation_chunks_table(conn: Any, embedding_dim: int) -> None:
+    """Create the table + indexes if missing. Recreate on dim mismatch.
+
+    On dim mismatch, every row in ``evaluations`` is first marked
+    ``status='failed'`` with an actionable message so the UI can't claim
+    those uploads are still ``ready`` after their chunks are dropped.
+    """
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
         cur.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto";')
@@ -38,20 +44,35 @@ def init_evaluation_chunks_table(
             JOIN pg_class c ON a.attrelid = c.oid
             WHERE c.relname = %s AND a.attname = 'embedding'
             """,
-            (table_name,),
+            (TABLE,),
         )
         row = cur.fetchone()
         if row is not None and row[0] != embedding_dim:
+            old_dim = row[0]
             logger.warning(
-                "Vector dim mismatch on %s: column=%d provider=%d — recreating",
-                table_name, row[0], embedding_dim,
+                "Vector dim mismatch on %s: column=%d provider=%d — "
+                "marking every evaluation FAILED then recreating",
+                TABLE, old_dim, embedding_dim,
             )
-            cur.execute(f"DROP TABLE {table_name} CASCADE;")
+            cur.execute(
+                """
+                UPDATE evaluations
+                   SET status = 'failed',
+                       status_message = %s,
+                       finished_at = NOW()
+                 WHERE status <> 'failed'
+                """,
+                (
+                    f"embedding dim changed from {old_dim} to {embedding_dim}; "
+                    "reingest required",
+                ),
+            )
+            cur.execute(f"DROP TABLE {TABLE} CASCADE;")
             conn.commit()
 
         cur.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
+            CREATE TABLE IF NOT EXISTS {TABLE} (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 evaluation_id INTEGER NOT NULL
                     REFERENCES evaluations(id) ON DELETE CASCADE,
@@ -65,24 +86,24 @@ def init_evaluation_chunks_table(
             """
         )
         cur.execute(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS {table_name}_dedupe "
-            f"ON {table_name} (evaluation_id, chunk_label);"
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {TABLE}_dedupe "
+            f"ON {TABLE} (evaluation_id, chunk_label);"
         )
         cur.execute(
-            f"CREATE INDEX IF NOT EXISTS {table_name}_eval_id_idx "
-            f"ON {table_name} (evaluation_id);"
+            f"CREATE INDEX IF NOT EXISTS {TABLE}_eval_id_idx "
+            f"ON {TABLE} (evaluation_id);"
         )
         cur.execute(
-            f"CREATE INDEX IF NOT EXISTS {table_name}_metadata_gin "
-            f"ON {table_name} USING GIN (metadata jsonb_path_ops);"
+            f"CREATE INDEX IF NOT EXISTS {TABLE}_metadata_gin "
+            f"ON {TABLE} USING GIN (metadata jsonb_path_ops);"
         )
         cur.execute(
-            f"CREATE INDEX IF NOT EXISTS {table_name}_embedding_hnsw "
-            f"ON {table_name} USING hnsw (embedding vector_cosine_ops) "
+            f"CREATE INDEX IF NOT EXISTS {TABLE}_embedding_hnsw "
+            f"ON {TABLE} USING hnsw (embedding vector_cosine_ops) "
             f"WITH (m = 16, ef_construction = 64);"
         )
     conn.commit()
-    logger.info("Initialized %s with vector(%d)", table_name, embedding_dim)
+    logger.info("Initialized %s with vector(%d)", TABLE, embedding_dim)
 
 
 def build_eis_metadata(
@@ -117,17 +138,26 @@ def _vector_literal(vec: list[float]) -> str:
     return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
 
 
-def upsert_evaluation_chunks(
-    conn: Any,
+_UPSERT_SQL = f"""
+    INSERT INTO {TABLE}
+        (evaluation_id, embedding, content, breadcrumb, chunk_label, metadata)
+    VALUES (%s, %s::vector, %s, %s, %s, %s::jsonb)
+    ON CONFLICT (evaluation_id, chunk_label)
+    DO UPDATE SET
+        embedding = EXCLUDED.embedding,
+        content = EXCLUDED.content,
+        breadcrumb = EXCLUDED.breadcrumb,
+        metadata = EXCLUDED.metadata,
+        created_at = NOW();
+"""
+
+
+def _build_payload(
     rows: list[tuple[EisChunk, str, list[float], dict]],
     *,
     evaluation_id: int,
-    table_name: str = DEFAULT_TABLE,
-) -> int:
-    """Insert or replace chunks keyed on ``(evaluation_id, chunk_label)``."""
-    if not rows:
-        return 0
-    payload = [
+) -> list[tuple]:
+    return [
         (
             evaluation_id,
             _vector_literal(emb),
@@ -138,32 +168,64 @@ def upsert_evaluation_chunks(
         )
         for chunk, breadcrumb, emb, meta in rows
     ]
-    sql = f"""
-        INSERT INTO {table_name}
-            (evaluation_id, embedding, content, breadcrumb, chunk_label, metadata)
-        VALUES (%s, %s::vector, %s, %s, %s, %s::jsonb)
-        ON CONFLICT (evaluation_id, chunk_label)
-        DO UPDATE SET
-            embedding = EXCLUDED.embedding,
-            content = EXCLUDED.content,
-            breadcrumb = EXCLUDED.breadcrumb,
-            metadata = EXCLUDED.metadata,
-            created_at = NOW();
+
+
+def upsert_evaluation_chunks(
+    conn: Any,
+    rows: list[tuple[EisChunk, str, list[float], dict]],
+    *,
+    evaluation_id: int,
+) -> int:
+    """Insert or replace chunks keyed on ``(evaluation_id, chunk_label)``.
+
+    Additive — does NOT remove rows that aren't in the new payload. Use
+    :func:`replace_evaluation_chunks` when you need that.
     """
+    if not rows:
+        return 0
+    payload = _build_payload(rows, evaluation_id=evaluation_id)
     with conn.cursor() as cur:
-        psycopg2.extras.execute_batch(cur, sql, payload, page_size=50)
+        psycopg2.extras.execute_batch(cur, _UPSERT_SQL, payload, page_size=50)
     conn.commit()
     logger.info("Upserted %d rows into %s for evaluation_id=%d",
-                len(payload), table_name, evaluation_id)
+                len(payload), TABLE, evaluation_id)
     return len(payload)
 
 
-def cascade_delete_chunks_for_evaluation(
-    conn: Any, evaluation_id: int, table_name: str = DEFAULT_TABLE,
+def replace_evaluation_chunks(
+    conn: Any,
+    rows: list[tuple[EisChunk, str, list[float], dict]],
+    *,
+    evaluation_id: int,
 ) -> int:
+    """Atomically delete every chunk for ``evaluation_id`` and write ``rows``.
+
+    Either the whole replacement commits, or nothing changes and the caller
+    sees the original chunk set untouched. Used by the ingest pipeline so a
+    failed re-embed doesn't leave the evaluation in a half-empty state.
+    """
+    payload = _build_payload(rows, evaluation_id=evaluation_id)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {TABLE} WHERE evaluation_id = %s",
+                (evaluation_id,),
+            )
+            if payload:
+                psycopg2.extras.execute_batch(cur, _UPSERT_SQL, payload, page_size=50)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    logger.info("Replaced chunks for evaluation_id=%d (%d rows)",
+                evaluation_id, len(payload))
+    return len(payload)
+
+
+def cascade_delete_chunks_for_evaluation(conn: Any, evaluation_id: int) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            f"DELETE FROM {table_name} WHERE evaluation_id = %s",
+            f"DELETE FROM {TABLE} WHERE evaluation_id = %s",
             (evaluation_id,),
         )
         count = cur.rowcount
@@ -177,7 +239,6 @@ def search_evaluation_chunks(
     *,
     evaluation_id: int,
     top_k: int = 5,
-    table_name: str = DEFAULT_TABLE,
 ) -> list[dict]:
     sql = f"""
         SELECT
@@ -188,7 +249,7 @@ def search_evaluation_chunks(
             chunk_label,
             metadata,
             1 - (embedding <=> %s::vector) AS similarity
-        FROM {table_name}
+        FROM {TABLE}
         WHERE evaluation_id = %s
         ORDER BY embedding <=> %s::vector
         LIMIT %s;
@@ -201,7 +262,6 @@ def search_evaluation_chunks(
 
 def list_chunks_for_evaluation(
     conn: Any, evaluation_id: int, *, limit: int, offset: int,
-    table_name: str = DEFAULT_TABLE,
 ) -> list[dict]:
     sql = f"""
         SELECT
@@ -212,7 +272,7 @@ def list_chunks_for_evaluation(
             metadata,
             (metadata->>'page_start')::int AS page_start,
             (metadata->>'page_end')::int AS page_end
-        FROM {table_name}
+        FROM {TABLE}
         WHERE evaluation_id = %s
         ORDER BY
             COALESCE((metadata->>'chapter')::int, 0),
@@ -225,12 +285,11 @@ def list_chunks_for_evaluation(
         return [dict(r) for r in cur.fetchall()]
 
 
-def count_chunks_for_evaluation(
-    conn: Any, evaluation_id: int, table_name: str = DEFAULT_TABLE,
-) -> int:
+def count_chunks_for_evaluation(conn: Any, evaluation_id: int) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            f"SELECT COUNT(*) FROM {table_name} WHERE evaluation_id = %s",
+            f"SELECT COUNT(*) FROM {TABLE} WHERE evaluation_id = %s",
             (evaluation_id,),
         )
-        return cur.fetchone()[0]
+        r = cur.fetchone()
+        return r[0] if r else 0

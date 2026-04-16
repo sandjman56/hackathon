@@ -643,10 +643,17 @@ async def upload_evaluation(
             conn, filename=fname, sha256=sha,
             size_bytes=len(blob), blob=blob,
         )
+        # New row → ingest. Failed dupe → re-queue (retry intent).
+        # Ready/embedding/pending dupes → return as-is (no double work).
+        should_queue = row["status"] == "pending"
+        if row["status"] == "failed":
+            should_queue = reset_evaluation_for_reingest(conn, row["id"])
+            if should_queue:
+                row = get_evaluation_by_id(conn, row["id"]) or row
     finally:
         conn.close()
 
-    if row["status"] == "pending":
+    if should_queue:
         cid = _new_correlation_id()
         _sources_logger.info(
             "[eval:%s] queueing background ingest for id=%s", cid, row["id"],
@@ -663,11 +670,15 @@ def reingest_evaluation(eid: int, background_tasks: BackgroundTasks):
         row = get_evaluation_by_id(conn, eid)
         if row is None:
             raise HTTPException(status_code=404, detail="evaluation not found")
-        if row["status"] == "embedding":
-            raise HTTPException(status_code=409, detail="ingest already running")
-        reset_evaluation_for_reingest(conn, eid)
+        # Single conditional UPDATE — only one parallel caller wins.
+        transitioned = reset_evaluation_for_reingest(conn, eid)
     finally:
         conn.close()
+    if not transitioned:
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot reingest while status={row['status']!r}",
+        )
     cid = _new_correlation_id()
     background_tasks.add_task(_run_evaluation_ingest_background, eid, cid)
     return {"id": eid, "status": "pending", "correlation_id": cid}
@@ -722,6 +733,17 @@ def search_evaluation(eid: int, req: EvaluationSearchRequest):
 def delete_evaluation_endpoint(eid: int):
     conn = _get_connection()
     try:
+        row = get_evaluation_by_id(conn, eid)
+        if row is None:
+            raise HTTPException(status_code=404, detail="evaluation not found")
+        # H1 guard: refuse delete while a background task is mid-embed.
+        # Cascading the row out from under it would orphan the task and
+        # produce FK-violation noise as it tries to write progress/upsert.
+        if row["status"] == "embedding":
+            raise HTTPException(
+                status_code=409,
+                detail="cannot delete while ingest is running",
+            )
         if delete_evaluation_repo(conn, eid) == 0:
             raise HTTPException(status_code=404, detail="evaluation not found")
     finally:

@@ -77,12 +77,17 @@ def test_reset_for_reingest(db_conn):
     update_evaluation_status(db_conn, row["id"], status="failed",
                              status_message="boom", chunks_total=7,
                              chunks_embedded=3)
-    reset_evaluation_for_reingest(db_conn, row["id"])
+    assert reset_evaluation_for_reingest(db_conn, row["id"]) is True
     reset = get_evaluation_by_id(db_conn, row["id"])
     assert reset["status"] == "pending"
     assert reset["status_message"] is None
     assert reset["chunks_total"] == 0
     assert reset["chunks_embedded"] == 0
+    # Atomic guard: cannot reingest while embedding (closes C3 race).
+    update_evaluation_status(db_conn, row["id"], status="embedding")
+    assert reset_evaluation_for_reingest(db_conn, row["id"]) is False
+    still = get_evaluation_by_id(db_conn, row["id"])
+    assert still["status"] == "embedding"
 
 
 def test_mark_stuck(db_conn):

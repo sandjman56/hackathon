@@ -23,8 +23,7 @@ from rag.evaluation.chunker import EisChunk, chunk_eis_sections, make_chunk_labe
 from rag.evaluation.parser import parse_eis_pdf
 from rag.evaluation.store import (
     build_eis_metadata,
-    cascade_delete_chunks_for_evaluation,
-    upsert_evaluation_chunks,
+    replace_evaluation_chunks,
 )
 
 logger = logging.getLogger("eia.services.evaluation_ingest")
@@ -167,10 +166,9 @@ def ingest_evaluation_sync(
             )
             rows.append((chunk, breadcrumb, vec, meta))
 
-        cascade_delete_chunks_for_evaluation(conn, evaluation_id)
-        written = upsert_evaluation_chunks(conn, rows,
-                                           evaluation_id=evaluation_id)
-        log("upserted %d chunks", written)
+        written = replace_evaluation_chunks(conn, rows,
+                                            evaluation_id=evaluation_id)
+        log("replaced chunks atomically: %d rows", written)
 
         update_evaluation_status(
             conn, evaluation_id, status="ready",

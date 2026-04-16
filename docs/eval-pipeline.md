@@ -37,13 +37,13 @@ upsert's dedupe key.
 
 | Method | Path |
 |---|---|
-| `POST` | `/api/evaluations` — upload PDF, auto-ingest (sha256 dedupe returns existing row) |
+| `POST` | `/api/evaluations` — upload PDF, auto-ingest. SHA256 dedupe returns the existing row; if that row is `failed`, ingest is auto-retried. |
 | `GET` | `/api/evaluations` — list with status/progress |
 | `GET` | `/api/evaluations/{id}` — single row (used by UI polling) |
-| `POST` | `/api/evaluations/{id}/reingest` — clears chunks, re-runs pipeline |
+| `POST` | `/api/evaluations/{id}/reingest` — atomic re-queue. Returns `409` if status is `pending` or `embedding` (only `ready` / `failed` rows can transition). |
 | `GET` | `/api/evaluations/{id}/chunks?page=&per_page=` — paginated chunks inspector data |
 | `POST` | `/api/evaluations/{id}/search` — scoped similarity search |
-| `DELETE` | `/api/evaluations/{id}` — cascades to chunks via FK |
+| `DELETE` | `/api/evaluations/{id}` — cascades to chunks via FK. Returns `409` if status is `embedding` (refuses to orphan a running ingest). |
 
 ### Search example
 
@@ -71,11 +71,28 @@ On server restart, any row stuck in `pending` or `embedding` is swept to
   scans or purely narrative PDFs can trigger this. Currently not
   supported — consider a different document.
 - **`Vector dim mismatch`** — logged at startup if the embedding
-  provider changed dims between runs. The table is recreated and
-  chunks must be re-ingested (use the RETRY button on each row).
+  provider changed dims between runs. Before the chunk table is
+  recreated, every existing evaluation is moved to `failed` with
+  `status_message = "embedding dim changed from X to Y; reingest required"`
+  so the UI never claims a stale row is still `ready`. Re-ingest each
+  row with the RETRY button.
 - **Status stuck on `embedding` with `0/0`** — the parse step
   produced zero sections. Row will transition to `failed` momentarily
   with a message.
+
+## Concurrency guarantees
+
+- **Atomic re-ingest.** `POST /reingest` uses a single conditional
+  `UPDATE ... WHERE status IN ('ready','failed')` so two parallel
+  requests cannot both transition the same row — only one wins, the
+  other gets `409`.
+- **Atomic chunk replacement.** Re-ingest deletes existing chunks and
+  upserts new ones inside a single transaction. A mid-run failure
+  rolls back to the previous chunk set rather than leaving the
+  evaluation half-empty.
+- **Delete is gated.** `DELETE /api/evaluations/{id}` returns `409`
+  while a background ingest is mid-embed, preventing FK-cascade from
+  yanking rows out from under the running task.
 
 ## Database schema
 
