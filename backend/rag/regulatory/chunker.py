@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-import tiktoken
+from rag._tokens import count_tokens, encode as _encode, decode as _decode  # noqa: F401
 
 from .parser import DocumentType, RawSection
 
@@ -54,16 +54,7 @@ class Chunk:
 
 # --- token utilities -----------------------------------------------------
 
-_ENCODER = tiktoken.get_encoding("cl100k_base")
-
-
-def count_tokens(text: str) -> int:
-    """Return the cl100k_base token count for ``text``."""
-    return len(_ENCODER.encode(text))
-
-
-def _decode(tokens: list[int]) -> str:
-    return _ENCODER.decode(tokens)
+# ``count_tokens``, ``_encode``, and ``_decode`` come from ``rag._tokens``.
 
 
 # --- helpers --------------------------------------------------------------
@@ -233,7 +224,7 @@ def _apply_overlap(chunks: list[Chunk]) -> list[Chunk]:
         return chunks
     for i in range(1, len(chunks)):
         prev = chunks[i - 1]
-        prev_tokens = _ENCODER.encode(prev.body)
+        prev_tokens = _encode(prev.body)
         if len(prev_tokens) <= OVERLAP_TOKENS:
             continue
         overlap_text = _decode(prev_tokens[-OVERLAP_TOKENS:])
@@ -246,7 +237,7 @@ def _token_window_split(
     raw: RawSection, body: str, has_table: bool
 ) -> list[Chunk]:
     """Last-resort fixed-token split for sections without paragraph labels."""
-    tokens = _ENCODER.encode(body)
+    tokens = _encode(body)
     chunks: list[Chunk] = []
     step = TARGET_TOKENS - OVERLAP_TOKENS
     i = 0

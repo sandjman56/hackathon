@@ -106,6 +106,17 @@ The regulatory RAG store ingests:
 
 See [`docs/ingest-ecfr.md`](docs/ingest-ecfr.md) for the eCFR ingest operator guide.
 
+### EIS Evaluation Ingestion
+
+EIS documents uploaded on the Evaluations page are automatically parsed,
+chunked, embedded, and stored in the `evaluation_chunks` table for
+scoped retrieval.
+
+- Upload via the Evaluations page, or `POST /api/evaluations`
+- Query via `POST /api/evaluations/{id}/search`
+
+See [`docs/eval-pipeline.md`](docs/eval-pipeline.md) for the operator guide.
+
 ## Switching LLM Providers
 
 Change two environment variables — no code changes needed:

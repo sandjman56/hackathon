@@ -71,3 +71,9 @@ def db_conn():
 def stub_embedder():
     from tests.fixtures.stub_embedder import StubEmbeddingProvider
     return StubEmbeddingProvider(dim=8)
+
+
+@pytest.fixture(scope="session")
+def sample_eis_bytes() -> bytes:
+    from tests.fixtures.eis.build_sample import build_sample_eis_bytes
+    return build_sample_eis_bytes()
