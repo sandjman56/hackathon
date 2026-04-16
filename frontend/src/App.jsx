@@ -5,6 +5,7 @@ import ResultsPanel from './components/ResultsPanel.jsx'
 import BrainScanner from './components/BrainScanner.jsx'
 import DatabaseView from './components/DatabaseView.jsx'
 import EvaluationsView from './components/EvaluationsView.jsx'
+import EvaluationChunksView from './components/EvaluationChunksView.jsx'
 import useModelSelections from './hooks/useModelSelections.js'
 import { runEcfrIngestCommand } from './lib/ecfrIngestCommand.js'
 
@@ -25,6 +26,8 @@ function App() {
   const [logs, setLogs]         = useState([])
   const [running, setRunning]   = useState(false)
   const [view, setView]         = useState('main')
+  const [selectedEvalId, setSelectedEvalId] = useState(null)
+  const [selectedEvalFilename, setSelectedEvalFilename] = useState(null)
   const { selections, setSelection, availableProviders, modelCatalog } = useModelSelections()
   const [agentCosts, setAgentCosts] = useState({})
 
@@ -111,7 +114,20 @@ function App() {
       {view === 'db' ? (
         <DatabaseView onBack={() => setView('main')} />
       ) : view === 'evaluations' ? (
-        <EvaluationsView onBack={() => setView('main')} />
+        <EvaluationsView
+          onBack={() => setView('main')}
+          onOpenChunks={(eid, filename) => {
+            setSelectedEvalId(eid)
+            setSelectedEvalFilename(filename)
+            setView('evaluation-chunks')
+          }}
+        />
+      ) : view === 'evaluation-chunks' ? (
+        <EvaluationChunksView
+          evaluationId={selectedEvalId}
+          filename={selectedEvalFilename}
+          onBack={() => setView('evaluations')}
+        />
       ) : (
         <div style={styles.main}>
           {/* Left: project form */}
