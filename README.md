@@ -117,6 +117,19 @@ scoped retrieval.
 
 See [`docs/eval-pipeline.md`](docs/eval-pipeline.md) for the operator guide.
 
+### Evaluation Panel — IMPORT RUN
+
+The lower half of the Evaluations page is a resizable split pane for reviewing past pipeline runs:
+
+- **IMPORT RUN** (left panel) — pick any saved project from a dropdown; loads the latest agent output from each of the 5 output tables and displays them in collapsible sections with model/token/cost metadata.
+- **EVALUATE** (right panel) — stub button for future scoring/comparison logic.
+
+The split divider is draggable (15%–85% range). Agent outputs are rendered with type-aware views: key-value pairs (Project Parser), API cards (Environmental Data), regulation cards (Regulatory Screening), significance matrix table (Impact Analysis), and sectioned report (Report Synthesis).
+
+**Requires `project_id` to be passed on the run request** so pipeline outputs are persisted to the database. The `POST /api/run` body accepts an optional `project_id: int` field. Without it, IMPORT RUN will show `null` for all agents.
+
+**API:** `GET /api/projects/{id}/outputs` — returns the project record and the latest output row for each of the 5 agents.
+
 ## Switching LLM Providers
 
 Change two environment variables — no code changes needed:

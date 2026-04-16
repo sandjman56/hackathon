@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import RunPreviewPanel from './RunPreviewPanel.jsx'
+import EvaluatePanel from './EvaluatePanel.jsx'
 
 const apiBase = import.meta.env.VITE_API_URL ?? ''
 const POLL_INTERVAL_MS = 2000
@@ -45,6 +47,25 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
   const fileRef = useRef(null)
   const mountedRef = useRef(true)
   const timerRef = useRef(null)
+  const [splitPct, setSplitPct] = useState(70)
+  const draggingRef = useRef(false)
+  const splitContainerRef = useRef(null)
+
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!draggingRef.current || !splitContainerRef.current) return
+      const rect = splitContainerRef.current.getBoundingClientRect()
+      const pct = ((e.clientX - rect.left) / rect.width) * 100
+      setSplitPct(Math.min(85, Math.max(15, pct)))
+    }
+    const onMouseUp = () => { draggingRef.current = false }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
 
   const pollOnce = async () => {
     try {
@@ -207,6 +228,23 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
           </table>
         )}
       </div>
+
+      {/* ── Evaluation split pane ──────────────────────────────── */}
+      <div style={styles.splitDividerH} />
+      <div ref={splitContainerRef} style={styles.splitContainer}>
+        <div style={{ ...styles.splitLeft, width: `${splitPct}%` }}>
+          <RunPreviewPanel />
+        </div>
+        <div
+          style={styles.splitHandle}
+          onMouseDown={() => { draggingRef.current = true }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--green-primary)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border)' }}
+        />
+        <div style={{ ...styles.splitRight, width: `${100 - splitPct}%` }}>
+          <EvaluatePanel />
+        </div>
+      </div>
     </div>
   )
 }
@@ -227,7 +265,7 @@ const styles = {
     color: 'var(--green-primary)', letterSpacing: '3px',
   },
   docCount: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' },
-  body: { flex: 1, padding: '24px', overflowY: 'auto' },
+  body: { flex: 0, padding: '24px', overflowY: 'auto', maxHeight: '40vh' },
   uploadZone: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' },
   uploadBtn: {
     fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '1px',
@@ -269,5 +307,30 @@ const styles = {
     fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
     color: 'var(--red-alert)', background: 'transparent',
     border: '1px solid var(--red-alert)', borderRadius: '3px', padding: '3px 8px', cursor: 'pointer',
+  },
+  splitDividerH: {
+    height: '1px',
+    background: 'var(--border)',
+    flexShrink: 0,
+  },
+  splitContainer: {
+    flex: 1,
+    display: 'flex',
+    overflow: 'hidden',
+  },
+  splitLeft: {
+    overflow: 'auto',
+    padding: '16px',
+  },
+  splitHandle: {
+    width: '4px',
+    background: 'var(--border)',
+    cursor: 'col-resize',
+    flexShrink: 0,
+    transition: 'background 0.15s',
+  },
+  splitRight: {
+    overflow: 'auto',
+    padding: '16px',
   },
 }
