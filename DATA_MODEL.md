@@ -1,6 +1,6 @@
 # Data Model — EIA Agent Database
 
-> Auto-generated from `information_schema.columns` on 2026-04-15.
+> Last updated: 2026-04-16. Tables created by `db/vector_store.py:init_db()`.
 > Database: `aiagentsdb` (PostgreSQL + pgvector)
 
 ---
@@ -43,7 +43,9 @@ All 5 agent output tables share an identical schema. Each row stores the full JS
 - `impact_analysis_outputs`
 - `report_synthesis_outputs`
 
-**Relationships:** `project_id` → `projects.id`
+**Relationships:** `project_id` → `projects.id` (ON DELETE CASCADE)
+
+**Write path:** `pipeline.py:stream_eia_pipeline()` inserts one row per agent after each agent completes, keyed by the optional `project_id` from `POST /api/run`. Rows accumulate across runs; the read endpoint (`GET /api/projects/{id}/outputs`) always returns the most recent row per agent (`ORDER BY saved_at DESC LIMIT 1`).
 
 ---
 

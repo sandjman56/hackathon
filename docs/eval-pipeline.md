@@ -40,6 +40,28 @@ Example: `ch-4-environmental-resources §4.2.3 [p.142-143] (2/5)`
 Labels are unique per `(evaluation_id, chunk_label)` and back the
 upsert's dedupe key.
 
+## Evaluation Panel — IMPORT RUN
+
+The lower half of the Evaluations page provides a split-pane view for reviewing past pipeline runs without leaving the evaluation context.
+
+**Left panel — RunPreviewPanel:**
+- Click **IMPORT RUN** to open a project dropdown (fetches `GET /api/projects`)
+- Select a project to load its latest agent outputs via `GET /api/projects/{id}/outputs`
+- Five collapsible sections, one per agent, each showing model/token/cost metadata and a rendered output:
+  - **PROJECT PARSE** — key/value table from `parsed_project` JSONB
+  - **API CALLS & RESULTS** — per-source API response cards
+  - **REGULATORY SCREENING** — regulation name/description/jurisdiction cards
+  - **IMPACT MATRIX** — significance × confidence table (color-coded by severity)
+  - **REPORT SYNTHESIS** — numbered section list; `REPORT SYNTHESIS` starts collapsed by default
+- Re-clicking IMPORT RUN closes the dropdown without selecting
+
+**Right panel — EvaluatePanel:**
+- EVALUATE stub button; scoring/comparison logic to be implemented
+
+**Prerequisite:** The pipeline must be run with a `project_id` in the request body (`POST /api/run { ..., "project_id": 42 }`) for outputs to be persisted. Without it, all agent sections will show "No data for this agent".
+
+---
+
 ## API reference
 
 | Method | Path |
@@ -51,6 +73,7 @@ upsert's dedupe key.
 | `GET` | `/api/evaluations/{id}/chunks?page=&per_page=` — paginated chunks inspector data |
 | `POST` | `/api/evaluations/{id}/search` — scoped similarity search |
 | `DELETE` | `/api/evaluations/{id}` — cascades to chunks via FK. Returns `409` if status is `embedding` (refuses to orphan a running ingest). |
+| `GET` | `/api/projects/{id}/outputs` — returns project record + latest agent output row for each of the 5 agents. Used by the IMPORT RUN panel. |
 
 ### Search example
 

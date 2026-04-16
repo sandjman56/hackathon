@@ -163,6 +163,7 @@ class RunRequest(BaseModel):
     coordinates: str
     description: str
     models: dict[str, str] = Field(default_factory=dict)
+    project_id: int | None = None
 
 
 @app.post("/api/cancel")
@@ -204,6 +205,7 @@ def run_pipeline(req: RunRequest):
             description=req.description,
             models=req.models,
             embedding_provider=app.state.embedding_provider,
+            project_id=req.project_id,
         ),
         media_type="text/event-stream",
         headers={
@@ -300,6 +302,71 @@ def save_project(req: SaveProjectRequest):
         "description": req.description,
         "savedAt": row[1].isoformat(),
     }
+
+
+AGENT_OUTPUT_TABLES = [
+    ("project_parser", "project_parser_outputs"),
+    ("environmental_data", "environmental_data_outputs"),
+    ("regulatory_screening", "regulatory_screening_outputs"),
+    ("impact_analysis", "impact_analysis_outputs"),
+    ("report_synthesis", "report_synthesis_outputs"),
+]
+
+
+_ALLOWED_OUTPUT_TABLES = frozenset(t for _, t in AGENT_OUTPUT_TABLES)
+
+
+@app.get("/api/projects/{project_id}/outputs")
+def get_project_outputs(project_id: int):
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, coordinates, description, saved_at "
+            "FROM projects WHERE id = %s",
+            (project_id,),
+        )
+        proj = cur.fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        result = {
+            "project": {
+                "id": proj[0],
+                "name": proj[1],
+                "coordinates": proj[2],
+                "description": proj[3],
+                "savedAt": proj[4].isoformat() if proj[4] else None,
+            }
+        }
+
+        for agent_key, table_name in AGENT_OUTPUT_TABLES:
+            assert table_name in _ALLOWED_OUTPUT_TABLES
+            cur.execute(
+                f'SELECT output, model, input_tokens, output_tokens, cost_usd, saved_at '
+                f'FROM "{table_name}" WHERE project_id = %s '
+                f'ORDER BY saved_at DESC LIMIT 1',
+                (project_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                result[agent_key] = {
+                    "output": row[0],
+                    "model": row[1],
+                    "input_tokens": row[2],
+                    "output_tokens": row[3],
+                    "cost_usd": float(row[4]) if row[4] is not None else None,
+                    "savedAt": row[5].isoformat() if row[5] else None,
+                }
+            else:
+                result[agent_key] = None
+
+        return result
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
 
 
 @app.delete("/api/projects/{project_id}", status_code=204)
