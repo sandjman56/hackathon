@@ -33,9 +33,25 @@ from db.regulatory_sources import (
 )
 from services.regulatory_ingest import ingest_source_sync
 from services.ecfr_ingest import ingest_ecfr_source
+from services.evaluation_ingest import ingest_evaluation_sync
 from services.export_report import generate_pdf, generate_latex
 from rag.regulatory.store import init_regulatory_table
 from rag.regulatory.embedder import detect_embedding_dimension
+from db.evaluations import (
+    init_evaluations_schema,
+    insert_evaluation,
+    get_evaluation_by_id,
+    list_evaluations as list_evaluations_repo,
+    delete_evaluation as delete_evaluation_repo,
+    reset_evaluation_for_reingest,
+    mark_stuck_evaluations_failed,
+)
+from rag.evaluation.store import (
+    init_evaluation_chunks_table,
+    list_chunks_for_evaluation,
+    count_chunks_for_evaluation,
+    search_evaluation_chunks,
+)
 
 load_dotenv()
 
@@ -109,24 +125,20 @@ async def lifespan(app: FastAPI):
         print(f"[LIFESPAN] regulatory_chunks init failed: {exc}",
               flush=True, file=sys.stdout)
 
+    # --- evaluations table + evaluation_chunks table + sweep ----------
     try:
-        _conn2 = _get_connection()
-        with _conn2.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS evaluations (
-                    id SERIAL PRIMARY KEY,
-                    filename TEXT NOT NULL,
-                    sha256 TEXT NOT NULL,
-                    size_bytes INTEGER NOT NULL,
-                    blob BYTEA NOT NULL,
-                    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-            """)
-        _conn2.commit()
-        _conn2.close()
-        print("[LIFESPAN] evaluations table ready", flush=True, file=sys.stdout)
+        _conn3 = _get_connection()
+        init_evaluations_schema(_conn3)
+        init_evaluation_chunks_table(_conn3, embedding_dim=dim)
+        swept = mark_stuck_evaluations_failed(_conn3)
+        if swept:
+            print(f"[LIFESPAN] swept {swept} stuck evaluation rows",
+                  flush=True, file=sys.stdout)
+        _conn3.close()
+        print(f"[LIFESPAN] evaluations + evaluation_chunks ready (dim={dim})",
+              flush=True, file=sys.stdout)
     except Exception as exc:
-        print(f"[LIFESPAN] evaluations table init failed: {exc}",
+        print(f"[LIFESPAN] evaluations init failed: {exc}",
               flush=True, file=sys.stdout)
 
     yield
@@ -547,35 +559,60 @@ def delete_regulatory_source(source_id: str):
 
 # --- Evaluations (EIS document uploads) ------------------------------------
 
+def _run_evaluation_ingest_background(evaluation_id: int, correlation_id: str) -> None:
+    try:
+        conn = _get_connection()
+    except Exception:
+        _sources_logger.exception(
+            "[eval:%s] failed to open DB connection", correlation_id,
+        )
+        return
+    try:
+        ingest_evaluation_sync(
+            conn,
+            evaluation_id=evaluation_id,
+            embedding_provider=app.state.embedding_provider,
+            correlation_id=correlation_id,
+        )
+    except Exception:
+        _sources_logger.exception(
+            "[eval:%s] ingest raised in background task", correlation_id,
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            _sources_logger.exception(
+                "[eval:%s] conn.close() raised", correlation_id,
+            )
+
+
 @app.get("/api/evaluations")
-def list_evaluations():
+def list_evaluations_endpoint():
     conn = _get_connection()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id, filename, sha256, size_bytes, uploaded_at "
-            "FROM evaluations ORDER BY uploaded_at DESC"
-        )
-        rows = cur.fetchall()
-        cur.close()
-        return {
-            "documents": [
-                {
-                    "id": r[0],
-                    "filename": r[1],
-                    "sha256": r[2],
-                    "size_bytes": r[3],
-                    "uploaded_at": r[4].isoformat(),
-                }
-                for r in rows
-            ]
-        }
+        return {"documents": list_evaluations_repo(conn)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/{eid}")
+def get_evaluation_endpoint(eid: int):
+    conn = _get_connection()
+    try:
+        row = get_evaluation_by_id(conn, eid)
+        if row is None:
+            raise HTTPException(status_code=404, detail="evaluation not found")
+        return row
     finally:
         conn.close()
 
 
 @app.post("/api/evaluations", status_code=201)
-async def upload_evaluation(file: UploadFile = File(...)):
+async def upload_evaluation(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+):
     if file.content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
         raise HTTPException(status_code=400, detail="file must be a PDF")
 
@@ -602,37 +639,91 @@ async def upload_evaluation(file: UploadFile = File(...)):
 
     conn = _get_connection()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO evaluations (filename, sha256, size_bytes, blob) "
-            "VALUES (%s, %s, %s, %s) RETURNING id, uploaded_at",
-            (fname, sha, len(blob), blob),
+        row = insert_evaluation(
+            conn, filename=fname, sha256=sha,
+            size_bytes=len(blob), blob=blob,
         )
-        row = cur.fetchone()
-        conn.commit()
-        cur.close()
-        return {
-            "id": row[0],
-            "filename": fname,
-            "sha256": sha,
-            "size_bytes": len(blob),
-            "uploaded_at": row[1].isoformat(),
-        }
     finally:
         conn.close()
 
+    if row["status"] == "pending":
+        cid = _new_correlation_id()
+        _sources_logger.info(
+            "[eval:%s] queueing background ingest for id=%s", cid, row["id"],
+        )
+        background_tasks.add_task(_run_evaluation_ingest_background,
+                                  row["id"], cid)
+    return row
 
-@app.delete("/api/evaluations/{eval_id}", status_code=204)
-def delete_evaluation(eval_id: int):
+
+@app.post("/api/evaluations/{eid}/reingest", status_code=202)
+def reingest_evaluation(eid: int, background_tasks: BackgroundTasks):
     conn = _get_connection()
     try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM evaluations WHERE id = %s", (eval_id,))
-        if cur.rowcount == 0:
-            cur.close()
+        row = get_evaluation_by_id(conn, eid)
+        if row is None:
             raise HTTPException(status_code=404, detail="evaluation not found")
-        conn.commit()
-        cur.close()
+        if row["status"] == "embedding":
+            raise HTTPException(status_code=409, detail="ingest already running")
+        reset_evaluation_for_reingest(conn, eid)
+    finally:
+        conn.close()
+    cid = _new_correlation_id()
+    background_tasks.add_task(_run_evaluation_ingest_background, eid, cid)
+    return {"id": eid, "status": "pending", "correlation_id": cid}
+
+
+@app.get("/api/evaluations/{eid}/chunks")
+def get_evaluation_chunks(eid: int, page: int = 1, per_page: int = 25):
+    per_page = max(1, min(per_page, 200))
+    page = max(1, page)
+    offset = (page - 1) * per_page
+    conn = _get_connection()
+    try:
+        if get_evaluation_by_id(conn, eid) is None:
+            raise HTTPException(status_code=404, detail="evaluation not found")
+        total = count_chunks_for_evaluation(conn, eid)
+        chunks = list_chunks_for_evaluation(conn, eid,
+                                            limit=per_page, offset=offset)
+    finally:
+        conn.close()
+    total_pages = (total + per_page - 1) // per_page if total else 0
+    return {
+        "evaluation_id": eid,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "chunks": chunks,
+    }
+
+
+class EvaluationSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=4000)
+    top_k: int = Field(default=5, ge=1, le=50)
+
+
+@app.post("/api/evaluations/{eid}/search")
+def search_evaluation(eid: int, req: EvaluationSearchRequest):
+    conn = _get_connection()
+    try:
+        if get_evaluation_by_id(conn, eid) is None:
+            raise HTTPException(status_code=404, detail="evaluation not found")
+        vec = app.state.embedding_provider.embed(req.query)
+        results = search_evaluation_chunks(
+            conn, vec, evaluation_id=eid, top_k=req.top_k,
+        )
+    finally:
+        conn.close()
+    return {"evaluation_id": eid, "query": req.query, "results": results}
+
+
+@app.delete("/api/evaluations/{eid}", status_code=204)
+def delete_evaluation_endpoint(eid: int):
+    conn = _get_connection()
+    try:
+        if delete_evaluation_repo(conn, eid) == 0:
+            raise HTTPException(status_code=404, detail="evaluation not found")
     finally:
         conn.close()
 
