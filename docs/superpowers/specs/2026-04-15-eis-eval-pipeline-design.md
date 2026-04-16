@@ -189,8 +189,11 @@ Input: `list[RawEisSection]`. Output: `list[EisChunk]`.
 ### `EvaluationChunksView.jsx` (new)
 
 - Mirrors `ChunksView.jsx` in layout/structure.
-- Paginated list (25 per page default, cap 200) sorted by natural section order.
-- Columns: `chunk_label`, `breadcrumb`, `content` (truncated with expand chevron), `p.start-end`.
+- Two view modes via top-bar toggle:
+  - **CHUNKS** (default) — scrollable paginated list of collapsible rows. Each row shows chunk label, breadcrumb, page range. PREVIEW button expands full content in a styled `<pre>` block.
+  - **FULL TABLE** — traditional table with LABEL, BREADCRUMB, PAGES, and expandable CONTENT columns.
+- Paginated list (25 per page default) sorted by natural section order. Pagination shows numbered page buttons with ellipsis.
+- Switching modes clears expanded state.
 - Back button returns to `EvaluationsView`.
 - Error and loading states match `ChunksView` (race/err/a11y hardening from commit `997c71c`).
 
@@ -213,7 +216,7 @@ Input: `list[RawEisSection]`. Output: `list[EisChunk]`.
 ### Frontend (Vitest)
 
 - `EvaluationsView.test.jsx` — polling starts only with non-terminal rows, stops on unmount, progress bar renders, RETRY appears on failed.
-- `EvaluationChunksView.test.jsx` — pagination, breadcrumb rendering, back button, loading/error states.
+- `EvaluationChunksView.test.jsx` — pagination, breadcrumb rendering, back button, loading/error states, mode toggle, expanded state reset on mode switch.
 
 ## Documentation updates
 

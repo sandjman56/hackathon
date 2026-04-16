@@ -20,6 +20,13 @@ row is `pending` or `embedding` and shows:
 - `RETRY` button on `failed` rows
 - Filename becomes a clickable link to the chunks inspector when `ready`
 
+The chunks inspector has two view modes toggled via the top bar:
+- **CHUNKS** (default) — scrollable paginated list of collapsible rows.
+  Each row shows chunk label, breadcrumb, and page range. Click PREVIEW
+  to expand the full content.
+- **FULL TABLE** — traditional table with LABEL, BREADCRUMB, PAGES, and
+  expandable CONTENT columns.
+
 ## Chunk labels
 
 Every chunk gets a human-readable label:
