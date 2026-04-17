@@ -265,7 +265,7 @@ const styles = {
     color: 'var(--green-primary)', letterSpacing: '3px',
   },
   docCount: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' },
-  body: { flex: 0, padding: '24px', overflowY: 'auto', maxHeight: '40vh' },
+  body: { flexShrink: 0, padding: '24px', overflowY: 'auto', maxHeight: '40vh' },
   uploadZone: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' },
   uploadBtn: {
     fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '1px',

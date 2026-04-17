@@ -55,6 +55,15 @@ from rag.evaluation.store import (
     count_chunks_for_evaluation,
     search_evaluation_chunks,
 )
+from db.evaluation_scores import (
+    init_evaluation_scores_schema,
+    get_ground_truth,
+    upsert_ground_truth,
+    upsert_score,
+    get_score,
+)
+from rag_eval.extractor import extract_ground_truth
+from rag_eval.scorer import compute_scores
 
 load_dotenv()
 
@@ -142,6 +151,16 @@ async def lifespan(app: FastAPI):
               flush=True, file=sys.stdout)
     except Exception as exc:
         print(f"[LIFESPAN] evaluations init failed: {exc}",
+              flush=True, file=sys.stdout)
+
+    # --- evaluation scoring tables -----------------------------------------
+    try:
+        _conn4 = _get_connection()
+        init_evaluation_scores_schema(_conn4)
+        _conn4.close()
+        print("[LIFESPAN] evaluation_scores tables ready", flush=True, file=sys.stdout)
+    except Exception as exc:
+        print(f"[LIFESPAN] evaluation_scores init failed: {exc}",
               flush=True, file=sys.stdout)
 
     yield
@@ -247,13 +266,6 @@ class SaveProjectRequest(BaseModel):
     description: str
 
 
-AGENT_OUTPUT_TABLES = {
-    "project_parser": "project_parser_outputs",
-    "environmental_data": "environmental_data_outputs",
-    "regulatory_screening": "regulatory_screening_outputs",
-    "impact_analysis": "impact_analysis_outputs",
-    "report_synthesis": "report_synthesis_outputs",
-}
 
 
 class SaveOutputsRequest(BaseModel):
@@ -393,7 +405,7 @@ def save_project_outputs(project_id: int, req: SaveOutputsRequest):
         if cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Project not found. Save the project first.")
 
-        for agent_key, table_name in AGENT_OUTPUT_TABLES.items():
+        for agent_key, table_name in AGENT_OUTPUT_TABLES:
             output = req.agent_outputs.get(agent_key)
             if output is None:
                 continue
@@ -438,7 +450,7 @@ def load_project_outputs(project_id: int):
 
         agent_outputs = {}
         agent_costs = {}
-        for agent_key, table_name in AGENT_OUTPUT_TABLES.items():
+        for agent_key, table_name in AGENT_OUTPUT_TABLES:
             cur.execute(
                 f"SELECT output, model, input_tokens, output_tokens, cost_usd FROM {table_name} WHERE project_id = %s",
                 (project_id,),
@@ -1066,5 +1078,89 @@ def clear_db_table(table_name: str):
         conn.commit()
         cur.close()
         return {"table_name": table_name, "deleted_count": count}
+    finally:
+        conn.close()
+
+
+# --- Evaluation scoring -------------------------------------------------------
+
+class ScoreRequest(BaseModel):
+    project_id: int
+    eval_doc_id: int
+
+
+@app.post("/api/evaluations/score")
+def score_evaluation(req: ScoreRequest):
+    """Trigger evaluation scoring for a (project, EIS document) pair.
+
+    Steps:
+    1. Fetch impact_matrix from impact_analysis_outputs for project_id.
+    2. Fetch or extract ground truth from EIS chunks for eval_doc_id.
+    3. Compute Category F1, Significance Accuracy, Semantic Coverage.
+    4. Upsert result to evaluation_scores and return it.
+    """
+    conn = _get_connection()
+    try:
+        # 1. Load impact matrix
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT output FROM impact_analysis_outputs WHERE project_id = %s",
+            (req.project_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No impact analysis output found for this project. "
+                       "Run the pipeline first.",
+            )
+        impact_matrix = (row[0] or {}).get("impact_matrix") or row[0] or {}
+
+        # 2. Get or extract ground truth (cached per evaluation document)
+        gt_record = get_ground_truth(conn, req.eval_doc_id)
+        if gt_record is None:
+            from llm.provider_factory import get_llm_provider
+            llm = get_llm_provider()
+            categories, model_name = extract_ground_truth(
+                conn, req.eval_doc_id, llm
+            )
+            if not categories:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Ground truth extraction returned no categories. "
+                           "Ensure the EIS document is fully ingested (status=ready).",
+                )
+            upsert_ground_truth(conn, req.eval_doc_id, categories, model_name)
+            ground_truth = categories
+        else:
+            ground_truth = gt_record["categories"]
+
+        # 3. Compute scores
+        scores = compute_scores(
+            impact_matrix,
+            ground_truth,
+            conn,
+            req.eval_doc_id,
+            app.state.embedding_provider,
+        )
+
+        # 4. Persist and return
+        result = upsert_score(conn, req.project_id, req.eval_doc_id, scores)
+        return result
+
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/score/{project_id}/{eval_doc_id}")
+def get_evaluation_score(project_id: int, eval_doc_id: int):
+    """Fetch a previously computed score."""
+    conn = _get_connection()
+    try:
+        score = get_score(conn, project_id, eval_doc_id)
+        if score is None:
+            raise HTTPException(status_code=404, detail="Score not found")
+        return score
     finally:
         conn.close()
