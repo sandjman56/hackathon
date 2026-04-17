@@ -84,6 +84,37 @@ def extract_ground_truth(
     return categories, result.model
 
 
+def extract_ground_truth_multi(
+    conn: Any,
+    evaluation_ids: list[int],
+    llm: LLMProvider,
+    *,
+    max_chunks_per_doc: int = 20,
+) -> tuple[list[dict], str]:
+    """Extract and merge ground truth from multiple EIS documents.
+
+    Runs extraction per doc, then merges categories by taking the highest
+    significance across all documents for each category name.
+    """
+    merged: dict[str, dict] = {}
+    last_model = "none"
+
+    for eid in evaluation_ids:
+        cats, model = extract_ground_truth(conn, eid, llm, max_chunks=max_chunks_per_doc)
+        last_model = model
+        for cat in cats:
+            name = cat["category_name"]
+            existing = merged.get(name)
+            if existing is None:
+                merged[name] = cat
+            else:
+                _SCALE = {"significant": 3, "moderate": 2, "minimal": 1, "none": 0}
+                if _SCALE.get(cat["significance"], 0) > _SCALE.get(existing["significance"], 0):
+                    merged[name] = cat
+
+    return list(merged.values()), last_model
+
+
 def _sample_chunks(
     conn: Any, evaluation_id: int, max_chunks: int
 ) -> list[dict]:

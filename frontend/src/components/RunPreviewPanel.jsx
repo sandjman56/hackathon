@@ -10,7 +10,7 @@ const AGENT_SECTIONS = [
   { key: 'report_synthesis', label: 'REPORT SYNTHESIS' },
 ]
 
-export default function RunPreviewPanel() {
+export default function RunPreviewPanel({ onProjectSelect }) {
   const [projects, setProjects] = useState([])
   const [loadingProjects, setLoadingProjects] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -47,6 +47,7 @@ export default function RunPreviewPanel() {
   const handleSelect = async (project) => {
     setPickerOpen(false)
     setSelectedProject(project)
+    onProjectSelect?.(project)
     setLoadingOutputs(true)
     setError(null)
     try {

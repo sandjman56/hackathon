@@ -45,6 +45,8 @@ from db.evaluations import (
     insert_evaluation,
     get_evaluation_by_id,
     list_evaluations as list_evaluations_repo,
+    list_evaluations_by_project,
+    update_evaluation_project,
     delete_evaluation as delete_evaluation_repo,
     reset_evaluation_for_reingest,
     mark_stuck_evaluations_failed,
@@ -791,10 +793,25 @@ def _run_evaluation_ingest_background(evaluation_id: int, correlation_id: str) -
 
 
 @app.get("/api/evaluations")
-def list_evaluations_endpoint():
+def list_evaluations_endpoint(project_id: Optional[int] = None):
     conn = _get_connection()
     try:
+        if project_id is not None:
+            return {"documents": list_evaluations_by_project(conn, project_id)}
         return {"documents": list_evaluations_repo(conn)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/score/{project_id}")
+def get_evaluation_score_by_project(project_id: int):
+    """Fetch the saved evaluation score for a project."""
+    conn = _get_connection()
+    try:
+        score = get_score(conn, project_id)
+        if score is None:
+            raise HTTPException(status_code=404, detail="No score found for this project")
+        return score
     finally:
         conn.close()
 
@@ -815,6 +832,7 @@ def get_evaluation_endpoint(eid: int):
 async def upload_evaluation(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    project_id: Optional[int] = Form(None),
 ):
     if file.content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
         raise HTTPException(status_code=400, detail="file must be a PDF")
@@ -845,6 +863,7 @@ async def upload_evaluation(
         row = insert_evaluation(
             conn, filename=fname, sha256=sha,
             size_bytes=len(blob), blob=blob,
+            project_id=project_id,
         )
         # New row → ingest. Failed dupe → re-queue (retry intent).
         # Ready/embedding/pending dupes → return as-is (no double work).
@@ -949,6 +968,21 @@ def delete_evaluation_endpoint(eid: int):
             )
         if delete_evaluation_repo(conn, eid) == 0:
             raise HTTPException(status_code=404, detail="evaluation not found")
+    finally:
+        conn.close()
+
+
+class AssignProjectRequest(BaseModel):
+    project_id: Optional[int] = None
+
+
+@app.patch("/api/evaluations/{eid}/project", status_code=200)
+def assign_evaluation_project(eid: int, req: AssignProjectRequest):
+    conn = _get_connection()
+    try:
+        if not update_evaluation_project(conn, eid, req.project_id):
+            raise HTTPException(status_code=404, detail="evaluation not found")
+        return get_evaluation_by_id(conn, eid)
     finally:
         conn.close()
 
@@ -1086,22 +1120,32 @@ def clear_db_table(table_name: str):
 
 class ScoreRequest(BaseModel):
     project_id: int
-    eval_doc_id: int
 
 
 @app.post("/api/evaluations/score")
 def score_evaluation(req: ScoreRequest):
-    """Trigger evaluation scoring for a (project, EIS document) pair.
+    """Trigger evaluation scoring for a project using all linked EIS documents.
 
     Steps:
-    1. Fetch impact_matrix from impact_analysis_outputs for project_id.
-    2. Fetch or extract ground truth from EIS chunks for eval_doc_id.
-    3. Compute Category F1, Significance Accuracy, Semantic Coverage.
-    4. Upsert result to evaluation_scores and return it.
+    1. Fetch all ready eval docs linked to the project.
+    2. Fetch impact_matrix from impact_analysis_outputs for project_id.
+    3. Fetch or extract ground truth merged across all linked docs.
+    4. Compute Category F1, Significance Accuracy, Semantic Coverage.
+    5. Upsert result to evaluation_scores (one row per project) and return it.
     """
     conn = _get_connection()
     try:
-        # 1. Load impact matrix
+        # 1. Find all ready eval docs for this project
+        eval_docs = list_evaluations_by_project(conn, req.project_id)
+        if not eval_docs:
+            raise HTTPException(
+                status_code=422,
+                detail="No ready EIS documents linked to this project. "
+                       "Upload and ingest at least one document assigned to this project.",
+            )
+        eval_ids = [d["id"] for d in eval_docs]
+
+        # 2. Load impact matrix
         cur = conn.cursor()
         cur.execute(
             "SELECT output FROM impact_analysis_outputs WHERE project_id = %s",
@@ -1117,50 +1161,56 @@ def score_evaluation(req: ScoreRequest):
             )
         impact_matrix = (row[0] or {}).get("impact_matrix") or row[0] or {}
 
-        # 2. Get or extract ground truth (cached per evaluation document)
-        gt_record = get_ground_truth(conn, req.eval_doc_id)
-        if gt_record is None:
-            from llm.provider_factory import get_llm_provider
-            llm = get_llm_provider()
-            categories, model_name = extract_ground_truth(
-                conn, req.eval_doc_id, llm
-            )
-            if not categories:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Ground truth extraction returned no categories. "
-                           "Ensure the EIS document is fully ingested (status=ready).",
-                )
-            upsert_ground_truth(conn, req.eval_doc_id, categories, model_name)
-            ground_truth = categories
-        else:
-            ground_truth = gt_record["categories"]
+        # 3. Extract ground truth merged across all linked docs
+        from llm.provider_factory import get_llm_provider
+        llm = get_llm_provider()
 
-        # 3. Compute scores
+        # Use cached per-doc ground truth where available, re-extract only if missing
+        merged_categories: dict[str, dict] = {}
+        _SCALE = {"significant": 3, "moderate": 2, "minimal": 1, "none": 0}
+        last_model = "none"
+
+        for eid in eval_ids:
+            gt_record = get_ground_truth(conn, eid)
+            if gt_record is None:
+                cats, model_name = extract_ground_truth(conn, eid, llm)
+                if cats:
+                    upsert_ground_truth(conn, eid, cats, model_name)
+                    last_model = model_name
+            else:
+                cats = gt_record["categories"]
+                last_model = gt_record.get("llm_model") or last_model
+
+            for cat in cats:
+                name = cat["category_name"]
+                existing = merged_categories.get(name)
+                if existing is None:
+                    merged_categories[name] = cat
+                elif _SCALE.get(cat["significance"], 0) > _SCALE.get(existing["significance"], 0):
+                    merged_categories[name] = cat
+
+        ground_truth = list(merged_categories.values())
+        if not ground_truth:
+            raise HTTPException(
+                status_code=422,
+                detail="Ground truth extraction returned no categories. "
+                       "Ensure all linked EIS documents are fully ingested (status=ready).",
+            )
+
+        # 4. Compute scores across all linked eval docs
         scores = compute_scores(
             impact_matrix,
             ground_truth,
             conn,
-            req.eval_doc_id,
+            eval_ids,
             app.state.embedding_provider,
         )
 
-        # 4. Persist and return
-        result = upsert_score(conn, req.project_id, req.eval_doc_id, scores)
+        # 5. Persist and return (one score per project)
+        result = upsert_score(conn, req.project_id, scores)
         return result
 
     finally:
         conn.close()
 
 
-@app.get("/api/evaluations/score/{project_id}/{eval_doc_id}")
-def get_evaluation_score(project_id: int, eval_doc_id: int):
-    """Fetch a previously computed score."""
-    conn = _get_connection()
-    try:
-        score = get_score(conn, project_id, eval_doc_id)
-        if score is None:
-            raise HTTPException(status_code=404, detail="Score not found")
-        return score
-    finally:
-        conn.close()

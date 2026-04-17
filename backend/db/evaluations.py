@@ -18,7 +18,8 @@ logger = logging.getLogger("eia.db.evaluations")
 _LIST_COLUMNS = """
     id, filename, sha256, size_bytes, uploaded_at,
     status, status_message, chunks_total, chunks_embedded,
-    sections_count, embedding_dim, started_at, finished_at
+    sections_count, embedding_dim, started_at, finished_at,
+    project_id
 """
 
 
@@ -47,6 +48,11 @@ def init_evaluations_schema(conn: Any) -> None:
               ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ
         """)
         cur.execute("""
+            ALTER TABLE evaluations
+              ADD COLUMN IF NOT EXISTS project_id INTEGER
+                REFERENCES projects(id) ON DELETE SET NULL
+        """)
+        cur.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS evaluations_sha256_idx
               ON evaluations (sha256)
         """)
@@ -62,7 +68,13 @@ def _row_to_dict(r) -> dict:
 
 
 def insert_evaluation(
-    conn: Any, *, filename: str, sha256: str, size_bytes: int, blob: bytes,
+    conn: Any,
+    *,
+    filename: str,
+    sha256: str,
+    size_bytes: int,
+    blob: bytes,
+    project_id: Optional[int] = None,
 ) -> dict:
     """Insert a new evaluation row or return the existing row on sha256 hit."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -75,15 +87,26 @@ def insert_evaluation(
         )
         existing = cur.fetchone()
         if existing:
-            return _row_to_dict(existing)
+            row = _row_to_dict(existing)
+            if project_id is not None and row.get("project_id") != project_id:
+                cur.execute(
+                    f"UPDATE evaluations SET project_id = %s WHERE id = %s "
+                    f"RETURNING {_LIST_COLUMNS}",
+                    (project_id, row["id"]),
+                )
+                updated = cur.fetchone()
+                if updated:
+                    conn.commit()
+                    return _row_to_dict(updated)
+            return row
 
         cur.execute(
             f"""
-            INSERT INTO evaluations (filename, sha256, size_bytes, blob)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO evaluations (filename, sha256, size_bytes, blob, project_id)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING {_LIST_COLUMNS}
             """,
-            (filename, sha256, size_bytes, psycopg2.Binary(blob)),
+            (filename, sha256, size_bytes, psycopg2.Binary(blob), project_id),
         )
         row = cur.fetchone()
         if row is None:
@@ -223,6 +246,27 @@ def reset_evaluation_for_reingest(conn: Any, eid: int) -> bool:
         transitioned = cur.rowcount == 1
     conn.commit()
     return transitioned
+
+
+def update_evaluation_project(conn: Any, eid: int, project_id: Optional[int]) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE evaluations SET project_id = %s WHERE id = %s",
+            (project_id, eid),
+        )
+        updated = cur.rowcount == 1
+    conn.commit()
+    return updated
+
+
+def list_evaluations_by_project(conn: Any, project_id: int) -> list[dict]:
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT {_LIST_COLUMNS} FROM evaluations "
+            "WHERE project_id = %s AND status = 'ready' ORDER BY uploaded_at DESC",
+            (project_id,),
+        )
+        return [_row_to_dict(r) for r in cur.fetchall()]
 
 
 def mark_stuck_evaluations_failed(conn: Any) -> int:

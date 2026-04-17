@@ -13,7 +13,7 @@ import logging
 import re
 from typing import Any
 
-from rag.evaluation.store import search_evaluation_chunks
+from rag.evaluation.store import search_evaluation_chunks, search_evaluation_chunks_multi
 
 logger = logging.getLogger("eia.rag_eval.scorer")
 
@@ -110,7 +110,7 @@ def compute_scores(
     impact_matrix: dict,
     ground_truth: list[dict],
     conn: Any,
-    evaluation_id: int,
+    evaluation_ids: "int | list[int]",
     emb_provider: Any,
 ) -> dict:
     """Compute all three scoring metrics.
@@ -123,11 +123,13 @@ def compute_scores(
         List of category dicts from the extractor (any EIS document).
     conn:
         Live DB connection (read-only).
-    evaluation_id:
-        EIS document's evaluation_id (for semantic chunk search).
+    evaluation_ids:
+        One or more EIS evaluation IDs (for semantic chunk search).
     emb_provider:
         Embedding provider (for semantic coverage metric).
     """
+    if isinstance(evaluation_ids, int):
+        evaluation_ids = [evaluation_ids]
     gt_lookup = _build_gt_lookup(ground_truth)
     cells = impact_matrix.get("cells") or []
 
@@ -177,7 +179,7 @@ def compute_scores(
 
     # ── Metric 3: Semantic coverage ─────────────────────────────────────────
     sem_coverage = _compute_semantic_coverage(
-        cells, conn, evaluation_id, emb_provider
+        cells, conn, evaluation_ids, emb_provider
     )
 
     # ── Overall weighted score ───────────────────────────────────────────────
@@ -205,7 +207,7 @@ def compute_scores(
 def _compute_semantic_coverage(
     cells: list[dict],
     conn: Any,
-    evaluation_id: int,
+    evaluation_ids: list[int],
     emb_provider: Any,
 ) -> float:
     """Average max cosine similarity of agent reasoning texts vs. EIS chunks."""
@@ -223,8 +225,8 @@ def _compute_semantic_coverage(
     for text in sample:
         try:
             emb = emb_provider.embed(text)
-            results = search_evaluation_chunks(
-                conn, emb, evaluation_id=evaluation_id, top_k=1
+            results = search_evaluation_chunks_multi(
+                conn, emb, evaluation_ids=evaluation_ids, top_k=1
             )
             if results:
                 sim_scores.append(float(results[0].get("similarity", 0.0)))

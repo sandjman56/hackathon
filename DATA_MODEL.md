@@ -82,6 +82,7 @@ Uploaded EIS PDFs tracked through the ingest pipeline (pending → embedding →
 | `embedding_dim` | integer | YES | |
 | `started_at` | timestamptz | YES | |
 | `finished_at` | timestamptz | YES | |
+| `project_id` | integer | YES | FK → `projects.id` ON DELETE SET NULL |
 
 **Status lifecycle:** `pending` → `embedding` → `ready` | `failed`
 
@@ -207,13 +208,13 @@ LLM-extracted ground truth cache per EIS document. Populated on first `POST /api
 
 ## evaluation_scores
 
-Computed evaluation scores for a (project_run, EIS_document) pair. Written by `POST /api/evaluations/score`, read by `GET /api/evaluations/score/{project_id}/{eval_doc_id}`.
+One evaluation score per project, aggregated across all EIS documents linked to that project. Written by `POST /api/evaluations/score`, read by `GET /api/evaluations/score/{project_id}`.
 
 | Column | Type | Nullable | Default |
 |--------|------|----------|---------|
 | `id` | integer | NO | `nextval(...)` |
-| `project_id` | integer | NO | |
-| `evaluation_id` | integer | NO | |
+| `project_id` | integer | NO | FK → `projects.id` (CASCADE) |
+| `evaluation_id` | integer | YES | legacy FK → `evaluations.id` (SET NULL) |
 | `scored_at` | timestamptz | NO | `now()` |
 | `category_f1` | numeric(6,4) | YES | |
 | `category_precision` | numeric(6,4) | YES | |
@@ -223,7 +224,7 @@ Computed evaluation scores for a (project_run, EIS_document) pair. Written by `P
 | `overall_score` | numeric(6,4) | YES | |
 | `detail` | jsonb | NO | `{}` |
 
-**Relationships:** `project_id` → `projects.id` (CASCADE), `evaluation_id` → `evaluations.id` (CASCADE). UNIQUE on `(project_id, evaluation_id)` — re-scoring overwrites via UPSERT.
+**Relationships:** `project_id` → `projects.id` (CASCADE). UNIQUE on `project_id` — re-scoring a project overwrites its previous result via UPSERT. Ground truth is merged from all `evaluations` rows where `project_id` matches and `status = 'ready'`.
 
 **`detail` JSONB shape:**
 ```json

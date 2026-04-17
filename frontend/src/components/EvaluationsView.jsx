@@ -51,6 +51,14 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
   const draggingRef = useRef(false)
   const splitContainerRef = useRef(null)
 
+  // Shared state: project selected in RunPreviewPanel drives EvaluatePanel
+  const [selectedProject, setSelectedProject] = useState(null)
+
+  // Inline project picker for upload
+  const [projects, setProjects] = useState([])
+  const [showUploadPicker, setShowUploadPicker] = useState(false)
+  const [uploadProjectId, setUploadProjectId] = useState('')
+
   useEffect(() => {
     const onMouseMove = (e) => {
       if (!draggingRef.current || !splitContainerRef.current) return
@@ -85,6 +93,10 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
   useEffect(() => {
     mountedRef.current = true
     pollOnce()
+    fetch(`${apiBase}/api/projects`)
+      .then(r => r.json())
+      .then(data => setProjects(Array.isArray(data) ? data : []))
+      .catch(() => {})
     return () => {
       mountedRef.current = false
       if (timerRef.current) clearInterval(timerRef.current)
@@ -105,12 +117,23 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
     }
   }, [docs])
 
+  const handleUploadClick = () => {
+    setShowUploadPicker(true)
+  }
+
+  const handleUploadConfirm = () => {
+    setShowUploadPicker(false)
+    fileRef.current?.click()
+  }
+
   const handleUpload = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true); setError(null)
     try {
-      const form = new FormData(); form.append('file', file)
+      const form = new FormData()
+      form.append('file', file)
+      if (uploadProjectId) form.append('project_id', uploadProjectId)
       const res = await fetch(`${apiBase}/api/evaluations`, { method: 'POST', body: form })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -123,7 +146,11 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
         return [doc, ...prev]
       })
     } catch (e) { setError(e.message) }
-    finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
+    finally {
+      setUploading(false)
+      setUploadProjectId('')
+      if (fileRef.current) fileRef.current.value = ''
+    }
   }
 
   const handleDelete = async (id) => {
@@ -166,13 +193,36 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
           />
           <button
             style={styles.uploadBtn}
-            onClick={() => fileRef.current?.click()}
+            onClick={handleUploadClick}
             disabled={uploading}
           >
             {uploading ? 'UPLOADING...' : 'UPLOAD EIS PDF'}
           </button>
           <span style={styles.uploadHint}>PDF files up to 25 MB</span>
         </div>
+
+        {showUploadPicker && (
+          <div style={styles.uploadPickerRow}>
+            <label style={styles.uploadPickerLabel}>ASSIGN TO PROJECT</label>
+            <select
+              style={styles.uploadPickerSelect}
+              value={uploadProjectId}
+              onChange={e => setUploadProjectId(e.target.value)}
+              autoFocus
+            >
+              <option value="">— none —</option>
+              {projects.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <button style={styles.uploadPickerConfirm} onClick={handleUploadConfirm}>
+              SELECT FILE
+            </button>
+            <button style={styles.uploadPickerCancel} onClick={() => { setShowUploadPicker(false); setUploadProjectId('') }}>
+              CANCEL
+            </button>
+          </div>
+        )}
 
         {error && <div style={styles.error}>Error: {error}</div>}
         {loading && <div style={styles.muted}>Loading...</div>}
@@ -233,7 +283,7 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
       <div style={styles.splitDividerH} />
       <div ref={splitContainerRef} style={styles.splitContainer}>
         <div style={{ ...styles.splitLeft, width: `${splitPct}%` }}>
-          <RunPreviewPanel />
+          <RunPreviewPanel onProjectSelect={setSelectedProject} />
         </div>
         <div
           style={styles.splitHandle}
@@ -242,7 +292,7 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
           onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border)' }}
         />
         <div style={{ ...styles.splitRight, width: `${100 - splitPct}%` }}>
-          <EvaluatePanel />
+          <EvaluatePanel selectedProject={selectedProject} />
         </div>
       </div>
     </div>
@@ -307,6 +357,34 @@ const styles = {
     fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
     color: 'var(--red-alert)', background: 'transparent',
     border: '1px solid var(--red-alert)', borderRadius: '3px', padding: '3px 8px', cursor: 'pointer',
+  },
+  uploadPickerRow: {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '8px 12px', background: 'var(--bg-card)',
+    border: '1px solid var(--border)', borderRadius: '4px',
+    marginBottom: '16px',
+  },
+  uploadPickerLabel: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--text-muted)', whiteSpace: 'nowrap',
+  },
+  uploadPickerSelect: {
+    fontFamily: 'var(--font-mono)', fontSize: '11px',
+    color: 'var(--text-primary)', background: 'var(--bg-secondary)',
+    border: '1px solid var(--border)', borderRadius: '4px',
+    padding: '4px 8px', cursor: 'pointer', flex: 1,
+  },
+  uploadPickerConfirm: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: '#0a0a0a', background: 'var(--green-primary)',
+    border: '1px solid var(--green-primary)', borderRadius: '3px',
+    padding: '4px 12px', cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  uploadPickerCancel: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--text-muted)', background: 'transparent',
+    border: '1px solid var(--border)', borderRadius: '3px',
+    padding: '4px 10px', cursor: 'pointer',
   },
   splitDividerH: {
     height: '1px',

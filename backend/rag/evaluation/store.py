@@ -260,6 +260,37 @@ def search_evaluation_chunks(
         return [dict(r) for r in cur.fetchall()]
 
 
+def search_evaluation_chunks_multi(
+    conn: Any,
+    query_embedding: list[float],
+    *,
+    evaluation_ids: list[int],
+    top_k: int = 5,
+) -> list[dict]:
+    """Like search_evaluation_chunks but searches across multiple eval docs."""
+    if not evaluation_ids:
+        return []
+    placeholders = ",".join(["%s"] * len(evaluation_ids))
+    sql = f"""
+        SELECT
+            id::text,
+            evaluation_id,
+            content,
+            breadcrumb,
+            chunk_label,
+            metadata,
+            1 - (embedding <=> %s::vector) AS similarity
+        FROM {TABLE}
+        WHERE evaluation_id IN ({placeholders})
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s;
+    """
+    vec = _vector_literal(query_embedding)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, (vec, *evaluation_ids, vec, top_k))
+        return [dict(r) for r in cur.fetchall()]
+
+
 def list_chunks_for_evaluation(
     conn: Any, evaluation_id: int, *, limit: int, offset: int,
 ) -> list[dict]:
