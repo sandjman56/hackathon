@@ -29,14 +29,16 @@ def test_init_schema_is_idempotent(db_conn):
         assert expected in cols, f"missing column: {expected}"
 
 
-def test_insert_get_and_dedupe(db_conn):
+def test_insert_get_and_dedupe(db_conn, project_id):
     init_evaluations_schema(db_conn)
     row = insert_evaluation(
         db_conn, filename="a.pdf", sha256="sha-1", size_bytes=10, blob=b"X",
+        project_id=project_id,
     )
     assert row["status"] == "pending"
     again = insert_evaluation(
         db_conn, filename="a.pdf", sha256="sha-1", size_bytes=10, blob=b"X",
+        project_id=project_id,
     )
     assert again["id"] == row["id"]
 
@@ -53,10 +55,10 @@ def test_insert_get_and_dedupe(db_conn):
     assert any(r["id"] == row["id"] for r in rows)
 
 
-def test_status_and_progress_updates(db_conn):
+def test_status_and_progress_updates(db_conn, project_id):
     init_evaluations_schema(db_conn)
     row = insert_evaluation(db_conn, filename="p.pdf", sha256="sha-p",
-                            size_bytes=5, blob=b"Y")
+                            size_bytes=5, blob=b"Y", project_id=project_id)
     update_evaluation_status(db_conn, row["id"], status="embedding",
                              chunks_total=10, sections_count=3, embedding_dim=8,
                              started_at_now=True)
@@ -70,10 +72,10 @@ def test_status_and_progress_updates(db_conn):
     assert final["finished_at"] is not None
 
 
-def test_reset_for_reingest(db_conn):
+def test_reset_for_reingest(db_conn, project_id):
     init_evaluations_schema(db_conn)
     row = insert_evaluation(db_conn, filename="r.pdf", sha256="sha-r",
-                            size_bytes=5, blob=b"Z")
+                            size_bytes=5, blob=b"Z", project_id=project_id)
     update_evaluation_status(db_conn, row["id"], status="failed",
                              status_message="boom", chunks_total=7,
                              chunks_embedded=3)
@@ -90,12 +92,12 @@ def test_reset_for_reingest(db_conn):
     assert still["status"] == "embedding"
 
 
-def test_mark_stuck(db_conn):
+def test_mark_stuck(db_conn, project_id):
     init_evaluations_schema(db_conn)
     r1 = insert_evaluation(db_conn, filename="s1.pdf", sha256="sha-s1",
-                           size_bytes=5, blob=b"A")
+                           size_bytes=5, blob=b"A", project_id=project_id)
     r2 = insert_evaluation(db_conn, filename="s2.pdf", sha256="sha-s2",
-                           size_bytes=5, blob=b"B")
+                           size_bytes=5, blob=b"B", project_id=project_id)
     update_evaluation_status(db_conn, r1["id"], status="embedding",
                              chunks_total=5)
     # r2 stays 'pending'
@@ -109,9 +111,9 @@ def test_mark_stuck(db_conn):
     assert r2_after["status"] == "failed"
 
 
-def test_delete_evaluation_returns_count(db_conn):
+def test_delete_evaluation_returns_count(db_conn, project_id):
     init_evaluations_schema(db_conn)
     row = insert_evaluation(db_conn, filename="d.pdf", sha256="sha-d",
-                            size_bytes=5, blob=b"C")
+                            size_bytes=5, blob=b"C", project_id=project_id)
     assert delete_evaluation(db_conn, row["id"]) == 1
     assert delete_evaluation(db_conn, row["id"]) == 0

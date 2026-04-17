@@ -133,7 +133,7 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
     try {
       const form = new FormData()
       form.append('file', file)
-      if (uploadProjectId) form.append('project_id', uploadProjectId)
+      form.append('project_id', uploadProjectId)
       const res = await fetch(`${apiBase}/api/evaluations`, { method: 'POST', body: form })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -211,9 +211,12 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
               autoFocus
             >
               <option value="">— select project —</option>
-              {projects.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
+              {projects.length === 0
+                ? <option disabled>No projects yet — create a project first</option>
+                : projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))
+              }
             </select>
             <button
               style={{ ...styles.uploadPickerConfirm, opacity: uploadProjectId ? 1 : 0.4, cursor: uploadProjectId ? 'pointer' : 'not-allowed' }}
