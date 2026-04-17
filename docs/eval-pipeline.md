@@ -56,7 +56,12 @@ The lower half of the Evaluations page provides a split-pane view for reviewing 
 - Re-clicking IMPORT RUN closes the dropdown without selecting
 
 **Right panel — EvaluatePanel:**
-- EVALUATE stub button; scoring/comparison logic to be implemented
+- Select a **project run** (dropdown from `GET /api/projects`) and a **ready EIS document** (dropdown from `GET /api/evaluations`)
+- Click **EVALUATE** → `POST /api/evaluations/score` triggers scoring and saves results
+- Results display: Overall %, Category F1, Precision, Recall, Significance Accuracy, Semantic Coverage — each shown as a labeled progress bar
+- **ⓘ info button**: hover to show a scrollable methodology modal (persists 1 second after mouse-out). Explains all 5 scoring steps end-to-end
+- **▸ PER-CATEGORY BREAKDOWN**: expandable table showing TP/FP/FN label, agent significance, ground truth significance, and matched EIS category name per agent-designed category
+- Scope note displayed inline: F1 is computed over the 8 agent-designed categories only; EIS-only categories are not counted
 
 **Prerequisite:** The pipeline must be run with a `project_id` in the request body (`POST /api/run { ..., "project_id": 42 }`) for outputs to be persisted. Without it, all agent sections will show "No data for this agent".
 
@@ -74,6 +79,8 @@ The lower half of the Evaluations page provides a split-pane view for reviewing 
 | `POST` | `/api/evaluations/{id}/search` — scoped similarity search |
 | `DELETE` | `/api/evaluations/{id}` — cascades to chunks via FK. Returns `409` if status is `embedding` (refuses to orphan a running ingest). |
 | `GET` | `/api/projects/{id}/outputs` — returns project record + latest agent output row for each of the 5 agents. Used by the IMPORT RUN panel. |
+| `POST` | `/api/evaluations/score` — body: `{"project_id": int, "eval_doc_id": int}`. Extracts/reuses ground truth from EIS chunks, scores against impact matrix, upserts to `evaluation_scores`, returns score row. Ground truth extraction calls an LLM once per document and is cached. |
+| `GET` | `/api/evaluations/score/{project_id}/{eval_doc_id}` — fetch a previously computed score without re-running. |
 
 ### Search example
 

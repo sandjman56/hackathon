@@ -175,6 +175,75 @@ Embedded chunks from regulatory sources. pgvector similarity search.
 
 ---
 
+## evaluation_ground_truth
+
+LLM-extracted ground truth cache per EIS document. Populated on first `POST /api/evaluations/score`; reused on subsequent calls for the same document.
+
+| Column | Type | Nullable | Default |
+|--------|------|----------|---------|
+| `id` | integer | NO | `nextval(...)` |
+| `evaluation_id` | integer | NO | |
+| `extracted_at` | timestamptz | NO | `now()` |
+| `llm_model` | text | YES | |
+| `categories` | jsonb | NO | |
+
+**Relationships:** `evaluation_id` → `evaluations.id` (CASCADE). UNIQUE on `evaluation_id`.
+
+**`categories` JSONB shape** (array of objects):
+```json
+[
+  {
+    "category_name": "wetlands",
+    "significance": "significant",
+    "mitigation": ["compensatory"],
+    "evidence": "The Preferred Alternative would disturb 8.01 acres of wetlands."
+  }
+]
+```
+
+**Write path:** `rag_eval/extractor.py:extract_ground_truth()` → `db/evaluation_scores.py:upsert_ground_truth()` on first scoring request. Subsequent requests read cached value without calling LLM.
+
+---
+
+## evaluation_scores
+
+Computed evaluation scores for a (project_run, EIS_document) pair. Written by `POST /api/evaluations/score`, read by `GET /api/evaluations/score/{project_id}/{eval_doc_id}`.
+
+| Column | Type | Nullable | Default |
+|--------|------|----------|---------|
+| `id` | integer | NO | `nextval(...)` |
+| `project_id` | integer | NO | |
+| `evaluation_id` | integer | NO | |
+| `scored_at` | timestamptz | NO | `now()` |
+| `category_f1` | numeric(6,4) | YES | |
+| `category_precision` | numeric(6,4) | YES | |
+| `category_recall` | numeric(6,4) | YES | |
+| `significance_accuracy` | numeric(6,4) | YES | |
+| `semantic_coverage` | numeric(6,4) | YES | |
+| `overall_score` | numeric(6,4) | YES | |
+| `detail` | jsonb | NO | `{}` |
+
+**Relationships:** `project_id` → `projects.id` (CASCADE), `evaluation_id` → `evaluations.id` (CASCADE). UNIQUE on `(project_id, evaluation_id)` — re-scoring overwrites via UPSERT.
+
+**`detail` JSONB shape:**
+```json
+{
+  "per_category": {
+    "wetlands": {"label": "TP", "agent_significance": "significant", "gt_significance": "significant", "gt_matched_name": "wetlands", "gt_evidence": "..."},
+    "air_quality": {"label": "FN", "agent_significance": "none", "gt_significance": "minimal", ...}
+  },
+  "tp": ["wetlands", "environmental_justice"],
+  "fp": [],
+  "fn": ["air_quality"],
+  "significance_samples": 7,
+  "scope_note": "F1 computed over the 8 agent-designed categories only."
+}
+```
+
+**Scoring weights:** Category F1 × 0.40 + Significance Accuracy × 0.40 + Semantic Coverage × 0.20.
+
+---
+
 ## regulatory_ingest_log
 
 Audit log for regulatory source ingest operations.
