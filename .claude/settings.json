@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd /c/Dev/aiagentsproject && graphify update . 2>/dev/null || true",
+            "command": "cd /Users/sanderschulman/Developer/aiagentsproject && graphify update . 2>/dev/null || true",
             "async": true,
             "statusMessage": "Updating knowledge graph..."
           }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd /c/Dev/aiagentsproject && graphify update . 2>/dev/null || true"
+            "command": "cd /Users/sanderschulman/Developer/aiagentsproject && graphify update . 2>/dev/null || true"
           }
         ]
       }
