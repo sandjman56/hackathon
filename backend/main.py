@@ -832,7 +832,7 @@ def get_evaluation_endpoint(eid: int):
 async def upload_evaluation(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    project_id: Optional[int] = Form(None),
+    project_id: int = Form(...),
 ):
     if file.content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
         raise HTTPException(status_code=400, detail="file must be a PDF")

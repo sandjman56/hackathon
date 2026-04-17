@@ -74,7 +74,7 @@ def insert_evaluation(
     sha256: str,
     size_bytes: int,
     blob: bytes,
-    project_id: Optional[int] = None,
+    project_id: int,
 ) -> dict:
     """Insert a new evaluation row or return the existing row on sha256 hit."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -88,7 +88,7 @@ def insert_evaluation(
         existing = cur.fetchone()
         if existing:
             row = _row_to_dict(existing)
-            if project_id is not None and row.get("project_id") != project_id:
+            if row.get("project_id") != project_id:
                 cur.execute(
                     f"UPDATE evaluations SET project_id = %s WHERE id = %s "
                     f"RETURNING {_LIST_COLUMNS}",

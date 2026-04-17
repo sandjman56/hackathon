@@ -203,19 +203,23 @@ export default function EvaluationsView({ onBack, onOpenChunks }) {
 
         {showUploadPicker && (
           <div style={styles.uploadPickerRow}>
-            <label style={styles.uploadPickerLabel}>ASSIGN TO PROJECT</label>
+            <label style={styles.uploadPickerLabel}>PROJECT <span style={{ color: 'var(--red-alert)' }}>*</span></label>
             <select
               style={styles.uploadPickerSelect}
               value={uploadProjectId}
               onChange={e => setUploadProjectId(e.target.value)}
               autoFocus
             >
-              <option value="">— none —</option>
+              <option value="">— select project —</option>
               {projects.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-            <button style={styles.uploadPickerConfirm} onClick={handleUploadConfirm}>
+            <button
+              style={{ ...styles.uploadPickerConfirm, opacity: uploadProjectId ? 1 : 0.4, cursor: uploadProjectId ? 'pointer' : 'not-allowed' }}
+              onClick={handleUploadConfirm}
+              disabled={!uploadProjectId}
+            >
               SELECT FILE
             </button>
             <button style={styles.uploadPickerCancel} onClick={() => { setShowUploadPicker(false); setUploadProjectId('') }}>
