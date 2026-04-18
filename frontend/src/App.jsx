@@ -32,6 +32,7 @@ function App() {
   const [agentCosts, setAgentCosts] = useState({})
   const [currentProjectId, setCurrentProjectId] = useState(null)
   const [saveResultsFlash, setSaveResultsFlash] = useState(null) // null | 'saving' | 'saved' | 'error'
+  const [pendingOverwrite, setPendingOverwrite] = useState(null) // null | {saved_at}
   const [systemStatus, setSystemStatus] = useState('checking') // 'checking'|'online'|'pending'|'offline'
   const statusTimerRef = useRef(null)
 
@@ -117,16 +118,18 @@ function App() {
     })
   }
 
-  const handleSaveResults = async () => {
+  const handleSaveResults = async (force = false) => {
     if (!currentProjectId) {
       setSaveResultsFlash('error')
       setTimeout(() => setSaveResultsFlash(null), 2000)
       return
     }
     setSaveResultsFlash('saving')
+    setPendingOverwrite(null)
     try {
       const apiBase = import.meta.env.VITE_API_URL ?? ''
-      const res = await fetch(`${apiBase}/api/projects/${currentProjectId}/outputs`, {
+      const url = `${apiBase}/api/projects/${currentProjectId}/save-run${force ? '?force=true' : ''}`
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -134,6 +137,12 @@ function App() {
           agent_costs: agentCosts,
         }),
       })
+      if (res.status === 409) {
+        const body = await res.json()
+        setSaveResultsFlash(null)
+        setPendingOverwrite({ saved_at: body.saved_at })
+        return
+      }
       if (!res.ok) throw new Error('save failed')
       setSaveResultsFlash('saved')
       setTimeout(() => setSaveResultsFlash(null), 1500)
@@ -242,20 +251,41 @@ function App() {
             <div style={styles.colMiddleBottom}>
               <ResultsPanel results={results} />
               {!running && Object.keys(agentOutputs).length > 0 && (
-                <button
-                  onClick={handleSaveResults}
-                  disabled={saveResultsFlash === 'saving'}
-                  style={{
-                    ...styles.saveResultsBtn,
-                    ...(saveResultsFlash === 'saved' ? styles.saveResultsBtnSaved : {}),
-                    ...(saveResultsFlash === 'error' ? styles.saveResultsBtnError : {}),
-                  }}
-                >
-                  {saveResultsFlash === 'saving' ? 'SAVING...'
-                    : saveResultsFlash === 'saved' ? 'SAVED!'
-                    : saveResultsFlash === 'error' ? 'SAVE PROJECT FIRST'
-                    : 'SAVE RESULTS'}
-                </button>
+                <div style={{ marginTop: '12px' }}>
+                  <button
+                    onClick={() => handleSaveResults(false)}
+                    disabled={saveResultsFlash === 'saving'}
+                    style={{
+                      ...styles.saveResultsBtn,
+                      ...(saveResultsFlash === 'saved' ? styles.saveResultsBtnSaved : {}),
+                      ...(saveResultsFlash === 'error' ? styles.saveResultsBtnError : {}),
+                    }}
+                  >
+                    {saveResultsFlash === 'saving' ? 'SAVING...'
+                      : saveResultsFlash === 'saved' ? 'SAVED ✓'
+                      : saveResultsFlash === 'error' ? 'SAVE PROJECT FIRST'
+                      : 'SAVE RESULTS'}
+                  </button>
+                  {pendingOverwrite && (
+                    <div style={styles.overwriteWarning}>
+                      <span>Results saved {new Date(pendingOverwrite.saved_at).toLocaleString()} already exist.</span>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                        <button
+                          style={styles.overwriteConfirmBtn}
+                          onClick={() => handleSaveResults(true)}
+                        >
+                          CONFIRM OVERWRITE
+                        </button>
+                        <button
+                          style={styles.overwriteCancelBtn}
+                          onClick={() => setPendingOverwrite(null)}
+                        >
+                          CANCEL
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -403,26 +433,58 @@ const styles = {
   },
   saveResultsBtn: {
     width: '100%',
-    marginTop: '12px',
-    padding: '10px',
-    background: 'transparent',
-    color: 'var(--green-primary)',
+    padding: '12px',
+    background: 'var(--green-primary)',
+    color: '#0a0a0a',
     border: '1px solid var(--green-primary)',
     borderRadius: '4px',
     fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    fontWeight: 600,
+    fontSize: '12px',
+    fontWeight: 700,
     letterSpacing: '2px',
     cursor: 'pointer',
-    transition: 'background 0.15s, color 0.15s',
+    transition: 'opacity 0.15s',
   },
   saveResultsBtnSaved: {
-    background: 'var(--green-primary)',
-    color: '#0a0a0a',
+    opacity: 0.8,
   },
   saveResultsBtnError: {
-    borderColor: '#ff4444',
+    background: 'transparent',
     color: '#ff4444',
+    borderColor: '#ff4444',
+  },
+  overwriteWarning: {
+    marginTop: '10px',
+    padding: '10px 12px',
+    background: 'rgba(255,170,0,0.08)',
+    border: '1px solid #ffaa00',
+    borderRadius: '4px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: '#ffaa00',
+    lineHeight: 1.5,
+  },
+  overwriteConfirmBtn: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '9px',
+    letterSpacing: '1px',
+    color: '#0a0a0a',
+    background: '#ffaa00',
+    border: '1px solid #ffaa00',
+    borderRadius: '3px',
+    padding: '4px 10px',
+    cursor: 'pointer',
+  },
+  overwriteCancelBtn: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '9px',
+    letterSpacing: '1px',
+    color: 'var(--text-muted)',
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    borderRadius: '3px',
+    padding: '4px 10px',
+    cursor: 'pointer',
   },
 }
 
