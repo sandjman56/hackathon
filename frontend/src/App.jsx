@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ProjectForm from './components/ProjectForm.jsx'
 import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
@@ -32,6 +32,36 @@ function App() {
   const [agentCosts, setAgentCosts] = useState({})
   const [currentProjectId, setCurrentProjectId] = useState(null)
   const [saveResultsFlash, setSaveResultsFlash] = useState(null) // null | 'saving' | 'saved' | 'error'
+  const [systemStatus, setSystemStatus] = useState('checking') // 'checking'|'online'|'pending'|'offline'
+  const statusTimerRef = useRef(null)
+
+  useEffect(() => {
+    const apiBase = import.meta.env.VITE_API_URL ?? ''
+
+    const check = async () => {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000)
+      let next = 'offline'
+      try {
+        const res = await fetch(`${apiBase}/api/health`, { signal: controller.signal })
+        clearTimeout(timeoutId)
+        next = res.ok ? 'online' : 'pending'
+      } catch (err) {
+        clearTimeout(timeoutId)
+        // AbortError means the 8s timeout fired — server is reachable but
+        // not responding yet (Render spinning a free dyno back up).
+        next = err.name === 'AbortError' ? 'pending' : 'offline'
+      }
+      setSystemStatus(next)
+      // Poll more aggressively when not online so we catch spin-up quickly.
+      statusTimerRef.current = setTimeout(check, next === 'online' ? 30000 : 12000)
+    }
+
+    check()
+    return () => {
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+    }
+  }, [])
 
   const handleCostUpdate = (data) => {
     setAgentCosts((prev) => ({ ...prev, [data.agent]: data }))
@@ -118,7 +148,7 @@ function App() {
       {/* Header */}
       <header style={styles.header}>
         <div style={styles.headerLeft}>
-          <span style={styles.pulsingDot} />
+          <span style={{ ...styles.pulsingDot, background: STATUS_CONFIG[systemStatus].dot }} />
           <span style={styles.title}>EIA AGENT</span>
           <span style={styles.version}>v0.1.0</span>
         </div>
@@ -135,7 +165,14 @@ function App() {
           >
             VIEW DB
           </button>
-          <span style={styles.statusChip}>SYSTEM ONLINE</span>
+          <span style={{
+            ...styles.statusChip,
+            color: STATUS_CONFIG[systemStatus].color,
+            borderColor: STATUS_CONFIG[systemStatus].color,
+            background: STATUS_CONFIG[systemStatus].bg,
+          }}>
+            {STATUS_CONFIG[systemStatus].label}
+          </span>
         </div>
       </header>
 
@@ -237,6 +274,13 @@ function App() {
       )}
     </div>
   )
+}
+
+const STATUS_CONFIG = {
+  checking: { label: 'CHECKING...', color: 'var(--text-muted)', bg: 'transparent', dot: 'var(--text-muted)' },
+  online:   { label: 'SYSTEM ONLINE',   color: 'var(--green-primary)', bg: 'var(--green-dim)',          dot: 'var(--green-primary)' },
+  pending:  { label: 'SYSTEM PENDING',  color: '#f0a500',              bg: 'rgba(240,165,0,0.1)',        dot: '#f0a500' },
+  offline:  { label: 'SYSTEM OFFLINE',  color: 'var(--red-alert)',     bg: 'rgba(255,68,68,0.1)',        dot: 'var(--red-alert)' },
 }
 
 const pulseKeyframes = `

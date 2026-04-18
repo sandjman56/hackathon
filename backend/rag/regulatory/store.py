@@ -308,6 +308,7 @@ def search_regulations(
     query_embedding: list[float],
     top_k: int = 5,
     filters: Optional[dict] = None,
+    source_ids: Optional[list[str]] = None,
     table_name: str = DEFAULT_TABLE,
 ) -> list[dict]:
     """Cosine-similarity search with optional metadata pre-filtering.
@@ -328,7 +329,7 @@ def search_regulations(
         containing ``id``, ``content``, ``breadcrumb``, ``metadata``,
         and ``similarity`` (in [0, 1]; 1.0 = identical).
     """
-    where_sql, where_args = _build_where(filters or {})
+    where_sql, where_args = _build_where(filters or {}, source_ids=source_ids)
     sql = f"""
         SELECT
             id::text,
@@ -348,9 +349,10 @@ def search_regulations(
         return [dict(r) for r in cur.fetchall()]
 
 
-def _build_where(filters: dict) -> tuple[str, tuple]:
-    if not filters:
-        return "", ()
+def _build_where(
+    filters: dict,
+    source_ids: Optional[list[str]] = None,
+) -> tuple[str, tuple]:
     clauses = []
     args: list = []
     for key, value in filters.items():
@@ -365,6 +367,10 @@ def _build_where(filters: dict) -> tuple[str, tuple]:
         else:
             clauses.append(f"metadata->>'{_safe_key(key)}' = %s")
             args.append(str(value))
+    if source_ids is not None:
+        # Cast source_id to text to avoid UUID vs. text type conflicts.
+        clauses.append("source_id::text = ANY(%s)")
+        args.append(source_ids)
     if not clauses:
         return "", ()
     return "WHERE " + " AND ".join(clauses), tuple(args)

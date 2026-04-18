@@ -50,7 +50,8 @@ _LIST_COLUMNS = """
     content_type,
     effective_date,
     cfr_title,
-    cfr_part
+    cfr_part,
+    project_id
 """
 
 
@@ -113,6 +114,16 @@ def init_regulatory_sources_table(conn: Any) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS {TABLE}_identity_idx
               ON {TABLE} (source_type, cfr_title, cfr_part, effective_date)
               WHERE source_type = 'ecfr';
+        """)
+        # Project assignment — one-to-one: a source belongs to at most one project.
+        cur.execute(f"""
+            ALTER TABLE {TABLE}
+              ADD COLUMN IF NOT EXISTS project_id INTEGER NULL
+                REFERENCES projects(id) ON DELETE SET NULL;
+        """)
+        cur.execute(f"""
+            CREATE INDEX IF NOT EXISTS {TABLE}_project_id_idx
+              ON {TABLE} (project_id);
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS regulatory_ingest_log (
@@ -462,6 +473,36 @@ def is_empty(conn: Any) -> bool:
     with conn.cursor() as cur:
         cur.execute(f"SELECT 1 FROM {TABLE} LIMIT 1;")
         return cur.fetchone() is None
+
+
+def assign_sources_to_project(
+    conn: Any,
+    source_ids: list[str],
+    project_id: int | None,
+) -> int:
+    """Set project_id on each source in source_ids. Returns rows updated."""
+    if not source_ids:
+        return 0
+    n = 0
+    with conn.cursor() as cur:
+        for sid in source_ids:
+            cur.execute(
+                f"UPDATE {TABLE} SET project_id = %s WHERE id = %s::uuid;",
+                (project_id, sid),
+            )
+            n += cur.rowcount
+        conn.commit()
+    return n
+
+
+def get_source_ids_for_project(conn: Any, project_id: int) -> list[str]:
+    """Return UUIDs of all ready sources assigned to a project."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id::text FROM {TABLE} WHERE project_id = %s AND status = 'ready';",
+            (project_id,),
+        )
+        return [row[0] for row in cur.fetchall()]
 
 
 def _normalize(row: Optional[dict]) -> Optional[dict]:

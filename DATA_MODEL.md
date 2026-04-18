@@ -155,6 +155,11 @@ Uploaded regulatory documents (PDFs or eCFR XML). Tracks ingest status and eCFR 
 | `effective_date` | date | YES | |
 | `cfr_title` | integer | YES | |
 | `cfr_part` | text | YES | |
+| `project_id` | integer | YES | FK → `projects.id` ON DELETE SET NULL |
+
+**Relationships:** `project_id` → `projects.id` (ON DELETE SET NULL). One source belongs to at most one project. When a project is deleted its sources become unassigned (not deleted).
+
+**Write path:** Set via `PATCH /api/regulations/sources/assign` (`assign_sources_to_project` in `db/regulatory_sources.py`). During pipeline execution, `RegulatoryScreeningAgent` queries source IDs for the run's `project_id` and restricts RAG retrieval to those sources only. Falls back to all sources if none are assigned to the project.
 
 ---
 

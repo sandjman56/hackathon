@@ -81,6 +81,7 @@ The lower half of the Evaluations page provides a split-pane view for reviewing 
 | `GET` | `/api/projects/{id}/outputs` — returns project record + latest agent output row for each of the 5 agents. Used by the IMPORT RUN panel. |
 | `POST` | `/api/evaluations/score` — body: `{"project_id": int, "eval_doc_id": int}`. Extracts/reuses ground truth from EIS chunks, scores against impact matrix, upserts to `evaluation_scores`, returns score row. Ground truth extraction calls an LLM once per document and is cached. |
 | `GET` | `/api/evaluations/score/{project_id}/{eval_doc_id}` — fetch a previously computed score without re-running. |
+| `PATCH` | `/api/regulations/sources/assign` — body: `{"source_ids": ["<uuid>", ...], "project_id": int \| null}`. Assigns (or unassigns when `project_id` is null) one or more regulatory sources to a project. Pydantic validates UUID format (returns 422 on bad input). During a pipeline run, `RegulatoryScreeningAgent` restricts RAG retrieval to sources assigned to `project_id`; falls back to all sources if none are assigned. |
 
 ### Search example
 

@@ -97,6 +97,7 @@ class EIAPipelineState(TypedDict):
     project_name: str
     coordinates: str
     description: str
+    project_id: int | None  # saved project; scopes regulatory RAG to assigned sources
 
     # Pipeline tracking
     pipeline_status: dict  # agent_key -> "pending"|"running"|"complete"|"error"
@@ -322,6 +323,7 @@ def stream_eia_pipeline(
         "project_name": project_name,
         "coordinates": coordinates,
         "description": description,
+        "project_id": project_id,
         "pipeline_status": pipeline_status,
         "parsed_project": {},
         "environmental_data": {},

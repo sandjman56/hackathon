@@ -33,6 +33,7 @@ from db.regulatory_sources import (
     list_chunks_for_source,
     count_chunks_all,
     list_chunks_all,
+    assign_sources_to_project,
 )
 from services.regulatory_ingest import ingest_source_sync
 from services.ecfr_ingest import ingest_ecfr_source
@@ -758,6 +759,24 @@ def delete_regulatory_source(source_id: str):
         deleted_chunks = cascade_delete_chunks(conn, source_id)
         delete_source(conn, source_id)
         return {"deleted_chunks": deleted_chunks}
+    finally:
+        conn.close()
+
+
+class AssignSourcesRequest(BaseModel):
+    source_ids: list[uuid.UUID]  # Pydantic validates UUID format; rejects malformed strings
+    project_id: int | None
+
+
+@app.patch("/api/regulations/sources/assign")
+def assign_regulatory_sources(req: AssignSourcesRequest):
+    """Assign (or unassign) a batch of regulatory sources to a project."""
+    if not req.source_ids:
+        return {"assigned": 0}
+    conn = _get_connection()
+    try:
+        n = assign_sources_to_project(conn, [str(sid) for sid in req.source_ids], req.project_id)
+        return {"assigned": n}
     finally:
         conn.close()
 
