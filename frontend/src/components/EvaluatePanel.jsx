@@ -166,12 +166,14 @@ export default function EvaluatePanel({ selectedProject }) {
   const [scores, setScores] = useState(null)
   const [error, setError] = useState(null)
   const [showDetail, setShowDetail] = useState(false)
+  const [savedRun, setSavedRun] = useState(null) // null | {run_id, saved_at}
 
-  // When project changes: load linked docs + auto-load saved score
+  // When project changes: load linked docs + auto-load saved score + check run
   useEffect(() => {
     setScores(null)
     setError(null)
     setLinkedDocs([])
+    setSavedRun(null)
     if (!selectedProject) return
 
     fetch(`${apiBase}/api/evaluations?project_id=${selectedProject.id}`)
@@ -182,6 +184,11 @@ export default function EvaluatePanel({ selectedProject }) {
     fetch(`${apiBase}/api/evaluations/score/${selectedProject.id}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data) setScores(data) })
+      .catch(() => {})
+
+    fetch(`${apiBase}/api/projects/${selectedProject.id}/run`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.run_id) setSavedRun(data) })
       .catch(() => {})
   }, [selectedProject?.id])
 
@@ -206,7 +213,7 @@ export default function EvaluatePanel({ selectedProject }) {
     }
   }
 
-  const canEvaluate = selectedProject && linkedDocs.length > 0 && !loading
+  const canEvaluate = selectedProject && linkedDocs.length > 0 && savedRun !== null && !loading
   const detail = scores?.detail || {}
   const perCat  = detail.per_category || {}
 
@@ -246,7 +253,7 @@ export default function EvaluatePanel({ selectedProject }) {
         onClick={handleEvaluate}
         disabled={!canEvaluate}
       >
-        {loading ? 'EVALUATING…' : scores ? 'RE-EVALUATE' : 'EVALUATE'}
+        {loading ? 'EVALUATING…' : scores ? 'RE-EVALUATE' : savedRun ? 'IMPORT RUN' : 'EVALUATE'}
       </button>
 
       {error && <div style={styles.error}>Error: {error}</div>}
