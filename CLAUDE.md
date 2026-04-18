@@ -49,6 +49,12 @@ docs/
 
 ---
 
+## Code Review
+
+**After finalizing any implementation, use the `superpowers:requesting-code-review` skill to run the code reviewer, then fix all Critical and Important issues before considering the work done.**
+
+---
+
 ## Absolute Rules
 
 - Never modify `render.yaml`

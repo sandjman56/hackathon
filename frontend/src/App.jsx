@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import ProjectForm from './components/ProjectForm.jsx'
 import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
@@ -37,6 +37,8 @@ function App() {
   const [pendingOverwrite, setPendingOverwrite] = useState(null) // null | {saved_at}
   const [systemStatus, setSystemStatus] = useState('checking') // 'checking'|'online'|'pending'|'offline'
   const statusTimerRef = useRef(null)
+  const globeContainerRef = useRef(null)
+  const [globeSize, setGlobeSize] = useState(320)
 
   useEffect(() => {
     const apiBase = import.meta.env.VITE_API_URL ?? ''
@@ -64,6 +66,20 @@ function App() {
     return () => {
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
     }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!globeContainerRef.current) return
+    const w = Math.floor(globeContainerRef.current.getBoundingClientRect().width)
+    if (w > 0) setGlobeSize(w)
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const w = Math.floor(e.contentRect.width)
+        if (w > 0) setGlobeSize(w)
+      }
+    })
+    ro.observe(globeContainerRef.current)
+    return () => ro.disconnect()
   }, [])
 
   const handleCostUpdate = (data) => {
@@ -160,8 +176,8 @@ function App() {
       <header style={styles.header}>
         <div style={styles.headerLeft}>
           <span style={{ ...styles.pulsingDot, background: STATUS_CONFIG[systemStatus].dot }} />
-          <span style={styles.title}>EIA AGENT</span>
-          <span style={styles.version}>v0.1.0</span>
+          <span style={styles.title}>CLEAVER</span>
+          <span style={styles.subtitle}>Customized Environmental Impact Reports</span>
         </div>
         <div style={styles.headerRight}>
           <button
@@ -297,11 +313,11 @@ function App() {
 
           {/* Right: globe + brain scanner */}
           <div style={styles.colRight}>
-            <div style={styles.globeWrapper}>
+            <div ref={globeContainerRef} style={styles.globeWrapper}>
               <Globe
                 projectName={projectInfo.projectName}
                 coordinates={projectInfo.coordinates}
-                size={220}
+                size={globeSize}
               />
             </div>
             <div style={styles.brainScannerWrapper}>
@@ -372,10 +388,13 @@ const styles = {
     color: 'var(--green-primary)',
     letterSpacing: '2px',
   },
-  version: {
+  subtitle: {
     fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
+    fontSize: '9px',
     color: 'var(--text-muted)',
+    letterSpacing: '0.5px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
   },
   headerRight: {
     display: 'flex',
@@ -444,10 +463,10 @@ const styles = {
     gap: 0,
   },
   globeWrapper: {
+    width: '100%',
+    aspectRatio: '1 / 1',
     flexShrink: 0,
-    display: 'flex',
-    justifyContent: 'flex-end',
-    padding: '16px 20px 12px 20px',
+    overflow: 'hidden',
   },
   brainScannerWrapper: {
     flex: 1,

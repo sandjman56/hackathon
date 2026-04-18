@@ -7,8 +7,8 @@ const RESUME_DELAY = 1800  // ms after drag release before auto-spin resumes
 // Keyframes injected once
 const GLOBE_CSS = `
 @keyframes mk-pulse {
-  0%   { transform: translate(-50%, -50%) scale(1); opacity: 0.7; }
-  100% { transform: translate(-50%, -50%) scale(2.8); opacity: 0; }
+  0%   { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(2.8); opacity: 0; }
 }
 `
 if (typeof document !== 'undefined') {
@@ -41,6 +41,7 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
     lastX: 0,
     lastY: 0,
     rafId: null,
+    zoom: 1,
   })
 
   const target = parseCoordinates(coordinates) || { lat: 40.4406, lon: -79.9959 }
@@ -52,10 +53,12 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
     const ctx = canvas.getContext('2d')
     const W = canvas.width
     const H = canvas.height
-    const R = W * 0.47
     const st = stateRef.current
 
+    const getR = () => W * 0.47 * st.zoom
+
     function project(lon, lat) {
+      const R = getR()
       const λ0 = st.centerLon * Math.PI / 180
       const φ0 = st.centerLat * Math.PI / 180
       const cosφ0 = Math.cos(φ0), sinφ0 = Math.sin(φ0)
@@ -101,6 +104,7 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
     const limbAngle = (x, y) => Math.atan2(y - H / 2, x - W / 2)
 
     function render() {
+      const R = getR()
       ctx.clearRect(0, 0, W, H)
 
       // outer halo
@@ -253,7 +257,7 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
       if (!canvasRef.current) return
       const dt = Math.min(64, now - st.lastT) / 1000
       st.lastT = now
-      if (!st.dragging && now >= st.resumeAt) {
+      if (!st.dragging && now >= st.resumeAt && st.zoom <= 1) {
         st.centerLon += AUTO_SPEED * dt
         if (st.centerLon > 180) st.centerLon -= 360
         if (st.centerLon < -180) st.centerLon += 360
@@ -264,10 +268,6 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
 
     st.lastT = performance.now()
     st.rafId = requestAnimationFrame(tick)
-
-    // drag
-    const DRAG_LON = 180 / (W * 0.9)
-    const DRAG_LAT = 140 / (H * 0.9)
 
     const onDown = (e) => {
       st.dragging = true
@@ -283,8 +283,10 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
       const dy = e.clientY - st.lastY
       st.lastX = e.clientX
       st.lastY = e.clientY
-      st.centerLon -= dx * DRAG_LON
-      st.centerLat += dy * DRAG_LAT
+      const dragLon = 180 / (W * 0.9 * st.zoom)
+      const dragLat = 140 / (H * 0.9 * st.zoom)
+      st.centerLon -= dx * dragLon
+      st.centerLat += dy * dragLat
       if (st.centerLat > 82) st.centerLat = 82
       if (st.centerLat < -82) st.centerLat = -82
       if (st.centerLon > 180) st.centerLon -= 360
@@ -314,6 +316,45 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
       canvas.removeEventListener('pointercancel', onUp)
     }
   }, [target.lat, target.lon, size])
+
+  // Zoom listeners in a stable effect — canvas ref and stateRef never change
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const st = stateRef.current
+    if (!canvas) return
+
+    const onWheel = (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        // deltaMode: 0=pixels, 1=lines, 2=pages
+        const factor = e.deltaMode === 2 ? 0.5 : e.deltaMode === 1 ? 0.05 : 0.003
+        st.zoom = Math.max(1, Math.min(8, st.zoom - e.deltaY * factor))
+      }
+    }
+
+    const onKeyDown = (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault()
+          st.zoom = Math.min(8, st.zoom + 0.4)
+        } else if (e.key === '-') {
+          e.preventDefault()
+          st.zoom = Math.max(1, st.zoom - 0.4)
+        } else if (e.key === '0') {
+          e.preventDefault()
+          st.zoom = 1
+        }
+      }
+    }
+
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    window.addEventListener('keydown', onKeyDown)
+
+    return () => {
+      canvas.removeEventListener('wheel', onWheel)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
 
   const ns = target.lat >= 0 ? 'N' : 'S'
   const ew = target.lon >= 0 ? 'E' : 'W'
@@ -352,6 +393,18 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
       {/* HUD */}
       <div style={{ ...styles.hud, top: 10, left: 12 }}>◉ TARGET ACQUIRED</div>
       <div style={{ ...styles.hud, bottom: 10, left: 12, color: '#888', letterSpacing: '1px' }}>{coordStr}</div>
+
+      {/* Zoom controls */}
+      <div style={styles.zoomControls}>
+        <button
+          style={styles.zoomBtn}
+          onPointerDown={(e) => { e.stopPropagation(); stateRef.current.zoom = Math.min(8, stateRef.current.zoom + 0.5) }}
+        >+</button>
+        <button
+          style={styles.zoomBtn}
+          onPointerDown={(e) => { e.stopPropagation(); stateRef.current.zoom = Math.max(1, stateRef.current.zoom - 0.5) }}
+        >−</button>
+      </div>
     </div>
   )
 }
@@ -458,5 +511,31 @@ const styles = {
     color: '#00ff87',
     zIndex: 5,
     pointerEvents: 'none',
+  },
+  zoomControls: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    zIndex: 10,
+  },
+  zoomBtn: {
+    width: 24,
+    height: 24,
+    background: 'rgba(0,255,135,0.1)',
+    border: '1px solid rgba(0,255,135,0.35)',
+    borderRadius: '3px',
+    color: '#00ff87',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '15px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    lineHeight: 1,
+    padding: 0,
+    userSelect: 'none',
   },
 }
