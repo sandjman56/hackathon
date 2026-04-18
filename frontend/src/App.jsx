@@ -177,8 +177,15 @@ function App() {
       <header style={styles.header}>
         <div style={styles.headerLeft}>
           <span style={{ ...styles.pulsingDot, background: STATUS_CONFIG[systemStatus].dot }} />
-          <span style={styles.title}>CLEAVER</span>
-          <span style={styles.subtitle}>Customized Environmental Impact Reports</span>
+          <svg width="20" height="28" viewBox="0 0 20 28" fill="none" style={{ filter: 'drop-shadow(0 0 5px #39ff14)', flexShrink: 0 }}>
+            <line x1="10" y1="0" x2="10" y2="28" stroke="#39ff14" strokeWidth="1.5" strokeLinecap="round"/>
+            <path d="M 10 8 C 6 8 1 12 1 18 C 1 24 5 27 10 28" stroke="#39ff14" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+            <path d="M 10 8 C 14 8 19 12 19 18 C 19 24 15 27 10 28" stroke="#39ff14" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+          </svg>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+            <span style={styles.title}>CLEAVER</span>
+            <span style={styles.subtitle}>Customized Environmental Impact Reports</span>
+          </div>
         </div>
         <div style={styles.headerRight}>
           <button
