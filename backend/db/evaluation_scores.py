@@ -61,6 +61,12 @@ def init_evaluation_scores_schema(conn: Any) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS evaluation_scores_project_id_key
               ON evaluation_scores (project_id)
         """)
+        # Idempotent migration: add run_id FK to pipeline_runs (nullable).
+        cur.execute("""
+            ALTER TABLE evaluation_scores
+              ADD COLUMN IF NOT EXISTS run_id INTEGER
+                REFERENCES pipeline_runs(id) ON DELETE SET NULL
+        """)
     conn.commit()
     logger.info("evaluation_ground_truth + evaluation_scores tables ready")
 
