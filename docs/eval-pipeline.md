@@ -79,8 +79,10 @@ The lower half of the Evaluations page provides a split-pane view for reviewing 
 | `POST` | `/api/evaluations/{id}/search` — scoped similarity search |
 | `DELETE` | `/api/evaluations/{id}` — cascades to chunks via FK. Returns `409` if status is `embedding` (refuses to orphan a running ingest). |
 | `GET` | `/api/projects/{id}/outputs` — returns project record + latest agent output row for each of the 5 agents. Used by the IMPORT RUN panel. |
-| `POST` | `/api/evaluations/score` — body: `{"project_id": int, "eval_doc_id": int}`. Extracts/reuses ground truth from EIS chunks, scores against impact matrix, upserts to `evaluation_scores`, returns score row. Ground truth extraction calls an LLM once per document and is cached. |
-| `GET` | `/api/evaluations/score/{project_id}/{eval_doc_id}` — fetch a previously computed score without re-running. |
+| `GET` | `/api/projects/{id}/run` — returns `{"run_id": int, "saved_at": "..."}` if the project has a saved pipeline run, else `{"run": null}`. |
+| `POST` | `/api/projects/{id}/save-run` — body: `{"agent_outputs": {...}, "agent_costs": {...}}`. UPSERTs `pipeline_runs` + all 5 agent output tables atomically. Returns `409 {"exists": true, "saved_at": "..."}` if a run already exists; append `?force=true` to overwrite. |
+| `POST` | `/api/evaluations/score` — body: `{"project_id": int}`. Extracts/reuses ground truth from EIS chunks, scores against impact matrix, upserts to `evaluation_scores`, returns score row. Ground truth extraction calls an LLM once per document and is cached. |
+| `GET` | `/api/evaluations/score/{project_id}` — fetch a previously computed score without re-running. Auto-called by EvaluatePanel on project load. |
 | `PATCH` | `/api/regulations/sources/assign` — body: `{"source_ids": ["<uuid>", ...], "project_id": int \| null}`. Assigns (or unassigns when `project_id` is null) one or more regulatory sources to a project. Pydantic validates UUID format (returns 422 on bad input). During a pipeline run, `RegulatoryScreeningAgent` restricts RAG retrieval to sources assigned to `project_id`; falls back to all sources if none are assigned. |
 
 ### Search example

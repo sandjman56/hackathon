@@ -211,6 +211,22 @@ LLM-extracted ground truth cache per EIS document. Populated on first `POST /api
 
 ---
 
+## pipeline_runs
+
+One saved pipeline run per project. Created/overwritten when the user clicks SAVE RESULTS after a pipeline completes. Provides a stable `run_id` anchor for evaluation scoring.
+
+| Column | Type | Nullable | Default |
+|--------|------|----------|---------|
+| `id` | integer | NO | `nextval(...)` |
+| `project_id` | integer | NO | FK → `projects.id` (CASCADE), UNIQUE |
+| `saved_at` | timestamptz | YES | `now()` |
+
+**Write path:** `POST /api/projects/{id}/save-run` — UPSERTs this row + all 5 agent output tables atomically. Returns `409` if a run already exists and `?force=true` is not set.
+
+**Read path:** `GET /api/projects/{id}/run` — returns `{run_id, saved_at}` or `{run: null}`.
+
+---
+
 ## evaluation_scores
 
 One evaluation score per project, aggregated across all EIS documents linked to that project. Written by `POST /api/evaluations/score`, read by `GET /api/evaluations/score/{project_id}`.
@@ -220,6 +236,7 @@ One evaluation score per project, aggregated across all EIS documents linked to 
 | `id` | integer | NO | `nextval(...)` |
 | `project_id` | integer | NO | FK → `projects.id` (CASCADE) |
 | `evaluation_id` | integer | YES | legacy FK → `evaluations.id` (SET NULL) |
+| `run_id` | integer | YES | FK → `pipeline_runs.id` (SET NULL) |
 | `scored_at` | timestamptz | NO | `now()` |
 | `category_f1` | numeric(6,4) | YES | |
 | `category_precision` | numeric(6,4) | YES | |
