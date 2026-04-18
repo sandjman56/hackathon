@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import StreamingResponse, Response
+from starlette.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -425,9 +425,6 @@ class SaveRunRequest(BaseModel):
 
 @app.post("/api/projects/{project_id}/save-run")
 def save_run(project_id: int, req: SaveRunRequest, force: bool = False):
-    from fastapi.responses import JSONResponse
-    import json as _json
-
     conn = _get_connection()
     cur = None
     try:
@@ -477,7 +474,7 @@ def save_run(project_id: int, req: SaveRunRequest, force: bool = False):
                 f"saved_at = EXCLUDED.saved_at",
                 (
                     project_id,
-                    _json.dumps(output),
+                    psycopg2.extras.Json(output),
                     costs.get("model"),
                     costs.get("input_tokens"),
                     costs.get("output_tokens"),
@@ -1234,18 +1231,6 @@ def clear_db_table(table_name: str):
 
 class ScoreRequest(BaseModel):
     project_id: int
-
-
-@app.get("/api/evaluations/score/{project_id}")
-def get_evaluation_score(project_id: int):
-    conn = _get_connection()
-    try:
-        result = get_score(conn, project_id)
-        if result is None:
-            raise HTTPException(status_code=404, detail="No scores found")
-        return result
-    finally:
-        conn.close()
 
 
 @app.post("/api/evaluations/score")

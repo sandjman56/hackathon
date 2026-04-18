@@ -214,7 +214,7 @@ function App() {
               onRunningChange={handleRunningChange}
               modelSelections={selections}
               onCostUpdate={handleCostUpdate}
-              onProjectIdChange={setCurrentProjectId}
+              onProjectIdChange={(id) => { setCurrentProjectId(id); setPendingOverwrite(null) }}
               onLoadOutputs={(outputs, costs, pipelineStatus) => {
                 setAgentOutputs(outputs)
                 setAgentCosts(costs)
@@ -263,7 +263,7 @@ function App() {
                   >
                     {saveResultsFlash === 'saving' ? 'SAVING...'
                       : saveResultsFlash === 'saved' ? 'SAVED ✓'
-                      : saveResultsFlash === 'error' ? 'SAVE PROJECT FIRST'
+                      : saveResultsFlash === 'error' ? 'ERROR — TRY AGAIN'
                       : 'SAVE RESULTS'}
                   </button>
                   {pendingOverwrite && (

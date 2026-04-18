@@ -227,7 +227,7 @@ export default function EvaluatePanel({ selectedProject }) {
 
       {/* Project info + linked docs */}
       {!selectedProject ? (
-        <div style={styles.noProject}>Import a run to evaluate it.</div>
+        <div style={styles.noProject}>Select a project to evaluate it.</div>
       ) : (
         <div style={styles.projectInfo}>
           <div style={styles.projectInfoRow}>
@@ -253,7 +253,7 @@ export default function EvaluatePanel({ selectedProject }) {
         onClick={handleEvaluate}
         disabled={!canEvaluate}
       >
-        {loading ? 'EVALUATING…' : scores ? 'RE-EVALUATE' : savedRun ? 'IMPORT RUN' : 'EVALUATE'}
+        {loading ? 'EVALUATING…' : scores ? 'RE-EVALUATE' : 'EVALUATE'}
       </button>
 
       {error && <div style={styles.error}>Error: {error}</div>}

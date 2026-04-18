@@ -236,7 +236,7 @@ One evaluation score per project, aggregated across all EIS documents linked to 
 | `id` | integer | NO | `nextval(...)` |
 | `project_id` | integer | NO | FK → `projects.id` (CASCADE) |
 | `evaluation_id` | integer | YES | legacy FK → `evaluations.id` (SET NULL) |
-| `run_id` | integer | YES | FK → `pipeline_runs.id` (SET NULL) |
+| `run_id` | integer | YES | FK → `pipeline_runs.id` (SET NULL) — future use, currently always NULL |
 | `scored_at` | timestamptz | NO | `now()` |
 | `category_f1` | numeric(6,4) | YES | |
 | `category_precision` | numeric(6,4) | YES | |
