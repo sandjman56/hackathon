@@ -452,52 +452,6 @@ def stream_eia_pipeline(
                     "cost_usd": agent_cost_usd,
                 })
 
-                # Persist agent output to DB if a project_id was provided
-                if project_id is not None and agent_output is not None:
-                    _AGENT_TABLE_MAP = {
-                        "project_parser": "project_parser_outputs",
-                        "environmental_data": "environmental_data_outputs",
-                        "regulatory_screening": "regulatory_screening_outputs",
-                        "impact_analysis": "impact_analysis_outputs",
-                        "report_synthesis": "report_synthesis_outputs",
-                    }
-                    table_name = _AGENT_TABLE_MAP.get(agent_key)
-                    if table_name:
-                        try:
-                            from db.vector_store import _get_connection as _db_conn
-                            import json as _json
-                            conn_out = _db_conn()
-                            try:
-                                cur_out = conn_out.cursor()
-                                cur_out.execute(
-                                    f'INSERT INTO "{table_name}" '
-                                    f'(project_id, output, model, input_tokens, output_tokens, cost_usd, saved_at) '
-                                    f'VALUES (%s, %s, %s, %s, %s, %s, NOW()) '
-                                    f'ON CONFLICT (project_id) DO UPDATE SET '
-                                    f'output = EXCLUDED.output, model = EXCLUDED.model, '
-                                    f'input_tokens = EXCLUDED.input_tokens, '
-                                    f'output_tokens = EXCLUDED.output_tokens, '
-                                    f'cost_usd = EXCLUDED.cost_usd, '
-                                    f'saved_at = EXCLUDED.saved_at',
-                                    (
-                                        project_id,
-                                        _json.dumps(agent_output),
-                                        agent_model,
-                                        usage.get("input_tokens", 0),
-                                        usage.get("output_tokens", 0),
-                                        agent_cost_usd,
-                                    ),
-                                )
-                                conn_out.commit()
-                                cur_out.close()
-                            finally:
-                                conn_out.close()
-                        except Exception as _e:
-                            logger.warning(
-                                "[PIPELINE] Failed to persist %s output for project %s: %s",
-                                agent_key, project_id, _e,
-                            )
-
             except Exception as exc:
                 logger.error("[GRAPH] Node %s raised: %s", agent_key, exc, exc_info=True)
                 for step_state in agent_steps[agent_key]:
