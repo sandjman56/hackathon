@@ -26,20 +26,36 @@ H  = Inches(7.5)     # widescreen height
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def convert_potx_to_pptx(potx_path: str) -> Presentation:
-    """Read a .potx template and repackage it as a .pptx in memory."""
+    """Read a .potx template, strip its sample slides, repackage as .pptx."""
+    import re as _re
     buf = io.BytesIO()
     with zipfile.ZipFile(potx_path, 'r') as zin:
         with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
+                # Drop template sample slides — we add our own; keeping them
+                # causes duplicate-name conflicts in the ZIP that corrupt the file.
+                if item.filename.startswith('ppt/slides/'):
+                    continue
                 data = zin.read(item.filename)
                 if item.filename == '[Content_Types].xml':
                     data = data.replace(
                         b'presentationml.template.main+xml',
                         b'presentationml.presentation.main+xml',
                     )
+                    # Remove Override entries for the dropped slide files
+                    data = _re.sub(
+                        rb'<Override[^>]*/ppt/slides/slide\d+\.xml[^>]*/?>',
+                        b'', data,
+                    )
+                if item.filename == 'ppt/presentation.xml':
+                    # Strip <p:sldIdLst> so pptx opens with zero slides
+                    data = _re.sub(rb'<p:sldIdLst>.*?</p:sldIdLst>', b'<p:sldIdLst/>', data, flags=_re.DOTALL)
                 zout.writestr(item, data)
     buf.seek(0)
-    return Presentation(buf)
+    prs = Presentation(buf)
+    prs.slide_width  = W
+    prs.slide_height = H
+    return prs
 
 
 def solid_fill(shape, color: RGBColor):
@@ -258,10 +274,6 @@ def add_agent_slide(prs, agent_num, agent_name, color,
 def build(potx_path: str, output_path: str):
     prs = convert_potx_to_pptx(potx_path)
 
-    # Remove template placeholder slides
-    xml_slides = prs.slides._sldIdLst
-    for sld_id in list(xml_slides):
-        xml_slides.remove(sld_id)
 
     # ════════════════════════════════════════════════════════════════════════
     # SLIDE 1 — Title
