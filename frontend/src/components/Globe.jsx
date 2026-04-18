@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { GLOBE_LAND } from './globe_data.js'
 
 const AUTO_SPEED = 4   // degrees/second
@@ -31,6 +31,7 @@ function parseCoordinates(coordStr) {
 export default function Globe({ projectName, coordinates, size = 220 }) {
   const canvasRef = useRef(null)
   const markerRef = useRef(null)
+  const [zoomLevel, setZoomLevel] = useState(1)
   const stateRef = useRef({
     centerLon: -80,
     centerLat: 20,
@@ -328,30 +329,44 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
         e.preventDefault()
         // deltaMode: 0=pixels, 1=lines, 2=pages
         const factor = e.deltaMode === 2 ? 0.5 : e.deltaMode === 1 ? 0.05 : 0.003
-        st.zoom = Math.max(1, Math.min(8, st.zoom - e.deltaY * factor))
+        const next = Math.max(1, Math.min(8, st.zoom - e.deltaY * factor))
+        st.zoom = next
+        setZoomLevel(next)
       }
     }
 
+    // Attach passive:false wheel listener only while hovering to avoid scroll jank on ancestors
+    const onEnter = () => canvas.addEventListener('wheel', onWheel, { passive: false })
+    const onLeave = () => canvas.removeEventListener('wheel', onWheel)
+
     const onKeyDown = (e) => {
       if (e.ctrlKey || e.metaKey) {
+        let next = st.zoom
         if (e.key === '=' || e.key === '+') {
           e.preventDefault()
-          st.zoom = Math.min(8, st.zoom + 0.4)
+          next = Math.min(8, st.zoom + 0.4)
         } else if (e.key === '-') {
           e.preventDefault()
-          st.zoom = Math.max(1, st.zoom - 0.4)
+          next = Math.max(1, st.zoom - 0.4)
         } else if (e.key === '0') {
           e.preventDefault()
-          st.zoom = 1
+          next = 1
+        }
+        if (next !== st.zoom) {
+          st.zoom = next
+          setZoomLevel(next)
         }
       }
     }
 
-    canvas.addEventListener('wheel', onWheel, { passive: false })
+    canvas.addEventListener('pointerenter', onEnter)
+    canvas.addEventListener('pointerleave', onLeave)
     window.addEventListener('keydown', onKeyDown)
 
     return () => {
       canvas.removeEventListener('wheel', onWheel)
+      canvas.removeEventListener('pointerenter', onEnter)
+      canvas.removeEventListener('pointerleave', onLeave)
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [])
@@ -397,12 +412,24 @@ export default function Globe({ projectName, coordinates, size = 220 }) {
       {/* Zoom controls */}
       <div style={styles.zoomControls}>
         <button
-          style={styles.zoomBtn}
-          onPointerDown={(e) => { e.stopPropagation(); stateRef.current.zoom = Math.min(8, stateRef.current.zoom + 0.5) }}
+          style={{ ...styles.zoomBtn, ...(zoomLevel >= 8 ? styles.zoomBtnDisabled : {}) }}
+          disabled={zoomLevel >= 8}
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            const next = Math.min(8, stateRef.current.zoom + 0.5)
+            stateRef.current.zoom = next
+            setZoomLevel(next)
+          }}
         >+</button>
         <button
-          style={styles.zoomBtn}
-          onPointerDown={(e) => { e.stopPropagation(); stateRef.current.zoom = Math.max(1, stateRef.current.zoom - 0.5) }}
+          style={{ ...styles.zoomBtn, ...(zoomLevel <= 1 ? styles.zoomBtnDisabled : {}) }}
+          disabled={zoomLevel <= 1}
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            const next = Math.max(1, stateRef.current.zoom - 0.5)
+            stateRef.current.zoom = next
+            setZoomLevel(next)
+          }}
         >−</button>
       </div>
     </div>
@@ -537,5 +564,9 @@ const styles = {
     lineHeight: 1,
     padding: 0,
     userSelect: 'none',
+  },
+  zoomBtnDisabled: {
+    opacity: 0.3,
+    cursor: 'not-allowed',
   },
 }

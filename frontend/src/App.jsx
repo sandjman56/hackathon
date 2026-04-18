@@ -38,7 +38,7 @@ function App() {
   const [systemStatus, setSystemStatus] = useState('checking') // 'checking'|'online'|'pending'|'offline'
   const statusTimerRef = useRef(null)
   const globeContainerRef = useRef(null)
-  const [globeSize, setGlobeSize] = useState(320)
+  const [globeSize, setGlobeSize] = useState(200)
 
   useEffect(() => {
     const apiBase = import.meta.env.VITE_API_URL ?? ''
@@ -70,12 +70,13 @@ function App() {
 
   useLayoutEffect(() => {
     if (!globeContainerRef.current) return
-    const w = Math.floor(globeContainerRef.current.getBoundingClientRect().width)
-    if (w > 0) setGlobeSize(w)
+    const rect = globeContainerRef.current.getBoundingClientRect()
+    const s = Math.min(Math.floor(rect.height), Math.floor(rect.width))
+    if (s > 0) setGlobeSize(s)
     const ro = new ResizeObserver(entries => {
       for (const e of entries) {
-        const w = Math.floor(e.contentRect.width)
-        if (w > 0) setGlobeSize(w)
+        const s = Math.min(Math.floor(e.contentRect.height), Math.floor(e.contentRect.width))
+        if (s > 0) setGlobeSize(s)
       }
     })
     ro.observe(globeContainerRef.current)
@@ -395,6 +396,7 @@ const styles = {
     letterSpacing: '0.5px',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   headerRight: {
     display: 'flex',
@@ -438,7 +440,7 @@ const styles = {
     flexShrink: 0,
   },
   colMiddle: {
-    width: '28%',
+    width: '38%',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -457,16 +459,18 @@ const styles = {
   },
   colRight: {
     flex: 1,
+    minWidth: '200px',
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
   },
   globeWrapper: {
-    width: '100%',
-    aspectRatio: '1 / 1',
-    flexShrink: 0,
+    flex: 1,
     overflow: 'hidden',
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'flex-start',
   },
   brainScannerWrapper: {
     flex: 1,
