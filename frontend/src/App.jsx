@@ -3,6 +3,7 @@ import ProjectForm from './components/ProjectForm.jsx'
 import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
 import BrainScanner from './components/BrainScanner.jsx'
+import Globe from './components/Globe.jsx'
 import DatabaseView from './components/DatabaseView.jsx'
 import EvaluationsView from './components/EvaluationsView.jsx'
 import EvaluationChunksView from './components/EvaluationChunksView.jsx'
@@ -31,6 +32,7 @@ function App() {
   const { selections, setSelection, availableProviders, modelCatalog } = useModelSelections()
   const [agentCosts, setAgentCosts] = useState({})
   const [currentProjectId, setCurrentProjectId] = useState(null)
+  const [projectInfo, setProjectInfo] = useState({ projectName: '', coordinates: '' })
   const [saveResultsFlash, setSaveResultsFlash] = useState(null) // null | 'saving' | 'saved' | 'error'
   const [pendingOverwrite, setPendingOverwrite] = useState(null) // null | {saved_at}
   const [systemStatus, setSystemStatus] = useState('checking') // 'checking'|'online'|'pending'|'offline'
@@ -215,6 +217,7 @@ function App() {
               modelSelections={selections}
               onCostUpdate={handleCostUpdate}
               onProjectIdChange={(id) => { setCurrentProjectId(id); setPendingOverwrite(null) }}
+              onProjectInfoChange={setProjectInfo}
               onLoadOutputs={(outputs, costs, pipelineStatus) => {
                 setAgentOutputs(outputs)
                 setAgentCosts(costs)
@@ -292,13 +295,22 @@ function App() {
 
           <div style={styles.separator} />
 
-          {/* Right: brain scanner */}
+          {/* Right: globe + brain scanner */}
           <div style={styles.colRight}>
-            <BrainScanner
-              logs={logs}
-              running={running}
-              onCommand={handleCommand}
-            />
+            <div style={styles.globeWrapper}>
+              <Globe
+                projectName={projectInfo.projectName}
+                coordinates={projectInfo.coordinates}
+                size={220}
+              />
+            </div>
+            <div style={styles.brainScannerWrapper}>
+              <BrainScanner
+                logs={logs}
+                running={running}
+                onCommand={handleCommand}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -426,7 +438,20 @@ const styles = {
   },
   colRight: {
     flex: 1,
-    padding: '20px',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 0,
+  },
+  globeWrapper: {
+    flexShrink: 0,
+    display: 'flex',
+    justifyContent: 'flex-end',
+    padding: '16px 20px 12px 20px',
+  },
+  brainScannerWrapper: {
+    flex: 1,
+    padding: '0 20px 20px 20px',
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',

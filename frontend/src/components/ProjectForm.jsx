@@ -14,7 +14,7 @@ const AGENTS = [
   'report_synthesis',
 ]
 
-export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate, onProjectIdChange, onLoadOutputs }) {
+export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate, onProjectIdChange, onLoadOutputs, onProjectInfoChange }) {
   const [projectName, setProjectName] = useState('')
   const [coordinates, setCoordinates] = useState('')
   const [description, setDescription] = useState('')
@@ -23,6 +23,10 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
   const [saveFlash, setSaveFlash] = useState(false)
 
   const apiBase = import.meta.env.VITE_API_URL ?? ''
+
+  useEffect(() => {
+    onProjectInfoChange?.({ projectName, coordinates })
+  }, [projectName, coordinates, onProjectInfoChange])
 
   useEffect(() => {
     fetch(`${apiBase}/api/projects`)
