@@ -398,6 +398,101 @@ def delete_project(project_id: int):
     conn.close()
 
 
+@app.get("/api/projects/{project_id}/run")
+def get_project_run(project_id: int):
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, saved_at FROM pipeline_runs WHERE project_id = %s",
+            (project_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {"run": None}
+        return {"run_id": row[0], "saved_at": row[1].isoformat()}
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+class SaveRunRequest(BaseModel):
+    agent_outputs: dict
+    agent_costs: dict = Field(default_factory=dict)
+
+
+@app.post("/api/projects/{project_id}/save-run")
+def save_run(project_id: int, req: SaveRunRequest, force: bool = False):
+    from fastapi.responses import JSONResponse
+    import json as _json
+
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id, saved_at FROM pipeline_runs WHERE project_id = %s",
+            (project_id,),
+        )
+        existing = cur.fetchone()
+        if existing and not force:
+            return JSONResponse(
+                status_code=409,
+                content={"exists": True, "saved_at": existing[1].isoformat()},
+            )
+
+        cur.execute(
+            """
+            INSERT INTO pipeline_runs (project_id, saved_at)
+            VALUES (%s, NOW())
+            ON CONFLICT (project_id) DO UPDATE SET saved_at = NOW()
+            RETURNING id, saved_at
+            """,
+            (project_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("save_run: pipeline_runs upsert returned no row")
+        run_id, saved_at = row
+
+        for agent_key, table_name in AGENT_OUTPUT_TABLES:
+            if table_name not in _ALLOWED_OUTPUT_TABLES:
+                continue
+            output = req.agent_outputs.get(agent_key)
+            if output is None:
+                continue
+            costs = req.agent_costs.get(agent_key, {})
+            cur.execute(
+                f'INSERT INTO "{table_name}" '
+                f"(project_id, output, model, input_tokens, output_tokens, cost_usd, saved_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, NOW()) "
+                f"ON CONFLICT (project_id) DO UPDATE SET "
+                f"output = EXCLUDED.output, model = EXCLUDED.model, "
+                f"input_tokens = EXCLUDED.input_tokens, "
+                f"output_tokens = EXCLUDED.output_tokens, "
+                f"cost_usd = EXCLUDED.cost_usd, "
+                f"saved_at = EXCLUDED.saved_at",
+                (
+                    project_id,
+                    _json.dumps(output),
+                    costs.get("model"),
+                    costs.get("input_tokens"),
+                    costs.get("output_tokens"),
+                    costs.get("cost_usd"),
+                ),
+            )
+
+        conn.commit()
+        return {"run_id": run_id, "saved_at": saved_at.isoformat()}
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
 @app.post("/api/projects/{project_id}/outputs")
 def save_project_outputs(project_id: int, req: SaveOutputsRequest):
     conn = _get_connection()
@@ -1139,6 +1234,18 @@ def clear_db_table(table_name: str):
 
 class ScoreRequest(BaseModel):
     project_id: int
+
+
+@app.get("/api/evaluations/score/{project_id}")
+def get_evaluation_score(project_id: int):
+    conn = _get_connection()
+    try:
+        result = get_score(conn, project_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="No scores found")
+        return result
+    finally:
+        conn.close()
 
 
 @app.post("/api/evaluations/score")
