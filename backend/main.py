@@ -279,23 +279,60 @@ class SaveOutputsRequest(BaseModel):
 @app.get("/api/projects")
 def list_projects():
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, name, coordinates, description, saved_at FROM projects ORDER BY saved_at DESC"
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return [
-        {
-            "id": r[0],
-            "name": r[1],
-            "coordinates": r[2],
-            "description": r[3],
-            "savedAt": r[4].isoformat(),
-        }
-        for r in rows
-    ]
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, coordinates, description, saved_at FROM projects ORDER BY saved_at DESC"
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "coordinates": r[2],
+                "description": r[3],
+                "savedAt": r[4].isoformat(),
+            }
+            for r in rows
+        ]
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+@app.get("/api/pipeline-runs")
+def list_pipeline_runs():
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT pr.id, pr.project_id, pr.saved_at,
+                   p.name, p.coordinates, p.description
+            FROM pipeline_runs pr
+            JOIN projects p ON p.id = pr.project_id
+            ORDER BY pr.saved_at DESC
+            """
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "run_id": r[0],
+                "project_id": r[1],
+                "run_saved_at": r[2].isoformat() if r[2] else None,
+                "name": r[3],
+                "coordinates": r[4],
+                "description": r[5],
+            }
+            for r in rows
+        ]
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
 
 
 @app.post("/api/projects", status_code=201)
@@ -533,43 +570,6 @@ def save_project_outputs(project_id: int, req: SaveOutputsRequest):
         conn.close()
 
 
-@app.get("/api/projects/{project_id}/outputs")
-def load_project_outputs(project_id: int):
-    conn = _get_connection()
-    cur = conn.cursor()
-    try:
-        # Verify project exists
-        cur.execute("SELECT id FROM projects WHERE id = %s", (project_id,))
-        if cur.fetchone() is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        agent_outputs = {}
-        agent_costs = {}
-        for agent_key, table_name in AGENT_OUTPUT_TABLES:
-            cur.execute(
-                f"SELECT output, model, input_tokens, output_tokens, cost_usd FROM {table_name} WHERE project_id = %s",
-                (project_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                agent_outputs[agent_key] = None
-                agent_costs[agent_key] = None
-            else:
-                agent_outputs[agent_key] = row[0]
-                if row[1] is not None:
-                    agent_costs[agent_key] = {
-                        "model": row[1],
-                        "input_tokens": row[2],
-                        "output_tokens": row[3],
-                        "cost_usd": float(row[4]) if row[4] is not None else None,
-                    }
-                else:
-                    agent_costs[agent_key] = None
-
-        return {"agent_outputs": agent_outputs, "agent_costs": agent_costs}
-    finally:
-        cur.close()
-        conn.close()
 
 
 # --- Regulatory sources (DB-backed uploads + ingestion) -------------------
