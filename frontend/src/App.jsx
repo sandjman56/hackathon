@@ -176,11 +176,11 @@ function App() {
       {/* Header */}
       <header style={styles.header}>
         <div style={styles.headerLeft}>
-          <span style={{ ...styles.pulsingDot, background: STATUS_CONFIG[systemStatus].dot }} />
-          <svg width="20" height="28" viewBox="0 0 20 28" fill="none" style={{ filter: 'drop-shadow(0 0 5px #39ff14)', flexShrink: 0 }}>
-            <line x1="10" y1="0" x2="10" y2="28" stroke="#39ff14" strokeWidth="1.5" strokeLinecap="round"/>
-            <path d="M 10 8 C 6 8 1 12 1 18 C 1 24 5 27 10 28" stroke="#39ff14" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
-            <path d="M 10 8 C 14 8 19 12 19 18 C 19 24 15 27 10 28" stroke="#39ff14" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+          <svg width="20" height="28" viewBox="0 0 100 140" fill="none" style={{ filter: 'drop-shadow(0 0 6px #00ff87)', flexShrink: 0 }}>
+            <g fill="#00ff87">
+              <path d="M 50 4 L 52 80 L 50 90 L 48 80 Z"/>
+              <path d="M 22 44 C 16 60, 24 80, 50 86 C 76 80, 84 60, 78 44 C 80 52, 72 68, 50 76 C 28 68, 20 52, 22 44 Z"/>
+            </g>
           </svg>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
             <span style={styles.title}>CLEAVER</span>
@@ -381,13 +381,6 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
-  },
-  pulsingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    background: 'var(--green-primary)',
-    animation: 'pulse 2s ease-in-out infinite',
   },
   title: {
     fontFamily: 'var(--font-mono)',
