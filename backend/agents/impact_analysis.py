@@ -56,6 +56,15 @@ regulation is tangentially related.
 about this project type.
 - 0.0–0.24: Pure extrapolation; no supporting data or regulatory context.
 
+Category-specific guidance:
+- seismic_hazard: Use USGS SDC (A=minimal → E=critical) and PGA value. \
+SDC A/B = minimal concern; C/D/E = significant for infrastructure.
+- air_quality: Compare PM2.5 and ozone baseline means to NAAQS standards \
+(PM2.5 annual: 9 µg/m³; ozone 8-hr: 70 ppb). AQI > 100 = unhealthy baseline.
+- climate_conditions: Use mixing height and dispersion index for construction \
+air emissions. Low mixing height (<500m) or low dispersion index = poor \
+ventilation; increases significance of dust/emissions impacts.
+
 Mitigation — include ONLY categories that genuinely apply:
 - "avoidance": The impact could be avoided by project design changes.
 - "minimization": The impact can be reduced through construction practices or \
@@ -168,8 +177,16 @@ class ImpactAnalysisAgent:
             categories.append("prime_farmland")
         if env.get("ejscreen"):
             categories.append("environmental_justice")
+        if env.get("usgs_seismic"):
+            categories.append("seismic_hazard")
+        if env.get("epa_aqs"):
+            categories.append("air_quality")
+        if env.get("noaa_climate"):
+            categories.append("climate_conditions")
         # Always include these — LLM can reason about them from project type
-        categories.extend(["air_quality", "noise", "traffic"])
+        if "air_quality" not in categories:
+            categories.append("air_quality")
+        categories.extend(["noise", "traffic"])
         return categories
 
     def _build_prompt(self, parsed: dict, env: dict, regs: list,
@@ -240,6 +257,33 @@ Return JSON only."""
                 f"  EJ Screen: minority_pct={ej.get('minority_pct', '?')} "
                 f"low_income_pct={ej.get('low_income_pct', '?')} "
                 f"pm25_pct={ej.get('percentile_pm25', '?')}"
+            )
+
+        seismic = env.get("usgs_seismic", {})
+        if seismic:
+            parts.append(
+                f"  Seismic: SDC={seismic.get('seismic_design_category', '?')} "
+                f"PGA={seismic.get('peak_ground_accel_g', '?')}g "
+                f"elevation={seismic.get('elevation_m', '?')}m"
+            )
+
+        noaa = env.get("noaa_climate", {})
+        if noaa:
+            parts.append(
+                f"  Climate: mixing_height={noaa.get('mixing_height_m', '?')}m "
+                f"wind={noaa.get('wind_speed_kmh', '?')}km/h "
+                f"dispersion_index={noaa.get('dispersion_index', '?')} "
+                f"precip={noaa.get('precip_mm_per_period', '?')}mm"
+            )
+
+        aqs = env.get("epa_aqs", {})
+        if aqs:
+            parts.append(
+                f"  Air quality baseline ({aqs.get('period_days', 90)}-day): "
+                f"PM2.5_mean={aqs.get('pm25_mean', '?')}µg/m³ "
+                f"PM2.5_max={aqs.get('pm25_max', '?')}µg/m³ "
+                f"ozone_mean={aqs.get('ozone_mean', '?')}ppb "
+                f"AQI_mean={aqs.get('pm25_aqi_mean', '?')}"
             )
 
         errors = env.get("errors", {})

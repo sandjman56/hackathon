@@ -176,7 +176,7 @@ function App() {
       {/* Header */}
       <header style={styles.header}>
         <div style={styles.headerLeft}>
-          <svg width="20" height="28" viewBox="0 0 100 140" fill="none" style={{ filter: 'drop-shadow(0 0 6px #00ff87)', flexShrink: 0 }}>
+          <svg width="36" height="50" viewBox="0 0 100 140" fill="none" style={{ filter: 'drop-shadow(0 0 8px #00ff87)', flexShrink: 0 }}>
             <g fill="#00ff87">
               <path d="M 50 4 L 52 80 L 50 90 L 48 80 Z"/>
               <path d="M 22 44 C 16 60, 24 80, 50 86 C 76 80, 84 60, 78 44 C 80 52, 72 68, 50 76 C 28 68, 20 52, 22 44 Z"/>

@@ -7,6 +7,9 @@ from api_clients.nwi import query_nwi
 from api_clients.fema import query_fema
 from api_clients.farmland import query_farmland
 from api_clients.ejscreen import query_ejscreen
+from api_clients.usgs import query_usgs
+from api_clients.noaa import query_noaa
+from api_clients.aqs import query_aqs
 
 logger = logging.getLogger("eia.agents.environmental_data")
 
@@ -25,6 +28,9 @@ _API_CALLS = [
     ("fema_flood_zones", query_fema),
     ("usda_farmland", query_farmland),
     ("ejscreen", query_ejscreen),
+    ("usgs_seismic", query_usgs),
+    ("noaa_climate", query_noaa),
+    ("epa_aqs", query_aqs),
 ]
 
 
@@ -39,10 +45,10 @@ class EnvironmentalDataAgent:
         coordinates = state.get("coordinates", "")
         lat, lon = _parse_coordinates(coordinates)
 
-        logger.info("[EnvironmentalData] Starting — querying 5 federal APIs")
+        logger.info("[EnvironmentalData] Starting — querying 8 federal APIs")
         logger.info("[EnvironmentalData] Location: lat=%.6f  lon=%.6f", lat, lon)
         logger.info("[EnvironmentalData] APIs: USFWS IPaC, NWI, FEMA NFHL, "
-                    "USDA SSURGO, Census ACS (EJ demographics)")
+                    "USDA SSURGO, Census ACS (EJ), USGS Seismic, NOAA Climate, EPA AQS")
 
         results: dict = {
             "query_location": {"lat": lat, "lon": lon},

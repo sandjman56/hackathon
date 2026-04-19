@@ -68,11 +68,24 @@ function Empty({ msg = 'No data' }) {
 
 function renderProjectParser(data) {
   if (!data) return <Empty />
+  const actions = Array.isArray(data.actions) ? data.actions : []
+  const nexusColor = data.federal_nexus ? 'var(--green-primary)' : 'var(--text-muted)'
   return (
     <div style={s.outputBody}>
       <DataRow label="Type" value={data.project_type} />
       <DataRow label="Scale" value={data.scale} />
       <DataRow label="Location" value={data.location} />
+      {actions.length > 0 && (
+        <DataRow label="Actions" value={actions.join('  ·  ')} />
+      )}
+      <DataRow
+        label="Federal Nexus"
+        value={
+          <span style={{ color: nexusColor, fontWeight: 600 }}>
+            {data.federal_nexus === true ? 'Yes — NEPA applies' : data.federal_nexus === false ? 'No' : '—'}
+          </span>
+        }
+      />
     </div>
   )
 }
