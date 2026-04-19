@@ -33,11 +33,11 @@ def prepared_db(db_conn):
     return db_conn
 
 
-def test_ingest_end_to_end_happy_path(prepared_db):
+def test_ingest_end_to_end_happy_path(prepared_db, project_id):
     conn = prepared_db
     blob = build_sample_eis_bytes()
     row = insert_evaluation(conn, filename="sample.pdf", sha256="sha-ok",
-                            size_bytes=len(blob), blob=blob)
+                            size_bytes=len(blob), blob=blob, project_id=project_id)
     provider = _StubProvider(dim=8)
 
     ingest_evaluation_sync(conn, evaluation_id=row["id"],
@@ -53,7 +53,7 @@ def test_ingest_end_to_end_happy_path(prepared_db):
     assert n_chunks == final["chunks_total"]
 
 
-def test_ingest_marks_failed_on_empty_pdf(prepared_db):
+def test_ingest_marks_failed_on_empty_pdf(prepared_db, project_id):
     import pymupdf
     conn = prepared_db
     doc = pymupdf.open()
@@ -61,7 +61,7 @@ def test_ingest_marks_failed_on_empty_pdf(prepared_db):
     blob = bytes(doc.write())
     doc.close()
     row = insert_evaluation(conn, filename="empty.pdf", sha256="sha-empty",
-                            size_bytes=len(blob), blob=blob)
+                            size_bytes=len(blob), blob=blob, project_id=project_id)
 
     provider = _StubProvider()
     ingest_evaluation_sync(conn, evaluation_id=row["id"],
@@ -72,11 +72,11 @@ def test_ingest_marks_failed_on_empty_pdf(prepared_db):
     assert final["status_message"] is not None
 
 
-def test_ingest_is_idempotent(prepared_db):
+def test_ingest_is_idempotent(prepared_db, project_id):
     conn = prepared_db
     blob = build_sample_eis_bytes()
     row = insert_evaluation(conn, filename="idem.pdf", sha256="sha-idem",
-                            size_bytes=len(blob), blob=blob)
+                            size_bytes=len(blob), blob=blob, project_id=project_id)
     provider = _StubProvider()
 
     ingest_evaluation_sync(conn, evaluation_id=row["id"],

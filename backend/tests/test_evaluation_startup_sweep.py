@@ -7,15 +7,15 @@ from db.evaluations import (
 )
 
 
-def test_sweep_marks_pending_and_embedding_as_failed(db_conn):
+def test_sweep_marks_pending_and_embedding_as_failed(db_conn, project_id):
     init_evaluations_schema(db_conn)
     r_pending = insert_evaluation(db_conn, filename="p.pdf", sha256="sp",
-                                  size_bytes=5, blob=b"A")
+                                  size_bytes=5, blob=b"A", project_id=project_id)
     r_embedding = insert_evaluation(db_conn, filename="e.pdf", sha256="se",
-                                    size_bytes=5, blob=b"B")
+                                    size_bytes=5, blob=b"B", project_id=project_id)
     update_evaluation_status(db_conn, r_embedding["id"], status="embedding")
     r_ready = insert_evaluation(db_conn, filename="r.pdf", sha256="sr",
-                                size_bytes=5, blob=b"C")
+                                size_bytes=5, blob=b"C", project_id=project_id)
     update_evaluation_status(db_conn, r_ready["id"], status="ready")
 
     n = mark_stuck_evaluations_failed(db_conn)

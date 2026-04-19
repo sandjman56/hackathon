@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import StreamingResponse, Response
+from starlette.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -33,6 +33,7 @@ from db.regulatory_sources import (
     list_chunks_for_source,
     count_chunks_all,
     list_chunks_all,
+    assign_sources_to_project,
 )
 from services.regulatory_ingest import ingest_source_sync
 from services.ecfr_ingest import ingest_ecfr_source
@@ -45,6 +46,8 @@ from db.evaluations import (
     insert_evaluation,
     get_evaluation_by_id,
     list_evaluations as list_evaluations_repo,
+    list_evaluations_by_project,
+    update_evaluation_project,
     delete_evaluation as delete_evaluation_repo,
     reset_evaluation_for_reingest,
     mark_stuck_evaluations_failed,
@@ -276,23 +279,60 @@ class SaveOutputsRequest(BaseModel):
 @app.get("/api/projects")
 def list_projects():
     conn = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, name, coordinates, description, saved_at FROM projects ORDER BY saved_at DESC"
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return [
-        {
-            "id": r[0],
-            "name": r[1],
-            "coordinates": r[2],
-            "description": r[3],
-            "savedAt": r[4].isoformat(),
-        }
-        for r in rows
-    ]
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, coordinates, description, saved_at FROM projects ORDER BY saved_at DESC"
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "coordinates": r[2],
+                "description": r[3],
+                "savedAt": r[4].isoformat(),
+            }
+            for r in rows
+        ]
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+@app.get("/api/pipeline-runs")
+def list_pipeline_runs():
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT pr.id, pr.project_id, pr.saved_at,
+                   p.name, p.coordinates, p.description
+            FROM pipeline_runs pr
+            JOIN projects p ON p.id = pr.project_id
+            ORDER BY pr.saved_at DESC
+            """
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "run_id": r[0],
+                "project_id": r[1],
+                "run_saved_at": r[2].isoformat() if r[2] else None,
+                "name": r[3],
+                "coordinates": r[4],
+                "description": r[5],
+            }
+            for r in rows
+        ]
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
 
 
 @app.post("/api/projects", status_code=201)
@@ -395,6 +435,98 @@ def delete_project(project_id: int):
     conn.close()
 
 
+@app.get("/api/projects/{project_id}/run")
+def get_project_run(project_id: int):
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, saved_at FROM pipeline_runs WHERE project_id = %s",
+            (project_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {"run": None}
+        return {"run_id": row[0], "saved_at": row[1].isoformat()}
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+class SaveRunRequest(BaseModel):
+    agent_outputs: dict
+    agent_costs: dict = Field(default_factory=dict)
+
+
+@app.post("/api/projects/{project_id}/save-run")
+def save_run(project_id: int, req: SaveRunRequest, force: bool = False):
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id, saved_at FROM pipeline_runs WHERE project_id = %s",
+            (project_id,),
+        )
+        existing = cur.fetchone()
+        if existing and not force:
+            return JSONResponse(
+                status_code=409,
+                content={"exists": True, "saved_at": existing[1].isoformat()},
+            )
+
+        cur.execute(
+            """
+            INSERT INTO pipeline_runs (project_id, saved_at)
+            VALUES (%s, NOW())
+            ON CONFLICT (project_id) DO UPDATE SET saved_at = NOW()
+            RETURNING id, saved_at
+            """,
+            (project_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("save_run: pipeline_runs upsert returned no row")
+        run_id, saved_at = row
+
+        for agent_key, table_name in AGENT_OUTPUT_TABLES:
+            if table_name not in _ALLOWED_OUTPUT_TABLES:
+                continue
+            output = req.agent_outputs.get(agent_key)
+            if output is None:
+                continue
+            costs = req.agent_costs.get(agent_key, {})
+            cur.execute(
+                f'INSERT INTO "{table_name}" '
+                f"(project_id, output, model, input_tokens, output_tokens, cost_usd, saved_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, NOW()) "
+                f"ON CONFLICT (project_id) DO UPDATE SET "
+                f"output = EXCLUDED.output, model = EXCLUDED.model, "
+                f"input_tokens = EXCLUDED.input_tokens, "
+                f"output_tokens = EXCLUDED.output_tokens, "
+                f"cost_usd = EXCLUDED.cost_usd, "
+                f"saved_at = EXCLUDED.saved_at",
+                (
+                    project_id,
+                    psycopg2.extras.Json(output),
+                    costs.get("model"),
+                    costs.get("input_tokens"),
+                    costs.get("output_tokens"),
+                    costs.get("cost_usd"),
+                ),
+            )
+
+        conn.commit()
+        return {"run_id": run_id, "saved_at": saved_at.isoformat()}
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
 @app.post("/api/projects/{project_id}/outputs")
 def save_project_outputs(project_id: int, req: SaveOutputsRequest):
     conn = _get_connection()
@@ -438,43 +570,6 @@ def save_project_outputs(project_id: int, req: SaveOutputsRequest):
         conn.close()
 
 
-@app.get("/api/projects/{project_id}/outputs")
-def load_project_outputs(project_id: int):
-    conn = _get_connection()
-    cur = conn.cursor()
-    try:
-        # Verify project exists
-        cur.execute("SELECT id FROM projects WHERE id = %s", (project_id,))
-        if cur.fetchone() is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        agent_outputs = {}
-        agent_costs = {}
-        for agent_key, table_name in AGENT_OUTPUT_TABLES:
-            cur.execute(
-                f"SELECT output, model, input_tokens, output_tokens, cost_usd FROM {table_name} WHERE project_id = %s",
-                (project_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                agent_outputs[agent_key] = None
-                agent_costs[agent_key] = None
-            else:
-                agent_outputs[agent_key] = row[0]
-                if row[1] is not None:
-                    agent_costs[agent_key] = {
-                        "model": row[1],
-                        "input_tokens": row[2],
-                        "output_tokens": row[3],
-                        "cost_usd": float(row[4]) if row[4] is not None else None,
-                    }
-                else:
-                    agent_costs[agent_key] = None
-
-        return {"agent_outputs": agent_outputs, "agent_costs": agent_costs}
-    finally:
-        cur.close()
-        conn.close()
 
 
 # --- Regulatory sources (DB-backed uploads + ingestion) -------------------
@@ -760,6 +855,24 @@ def delete_regulatory_source(source_id: str):
         conn.close()
 
 
+class AssignSourcesRequest(BaseModel):
+    source_ids: list[uuid.UUID]  # Pydantic validates UUID format; rejects malformed strings
+    project_id: int | None
+
+
+@app.patch("/api/regulations/sources/assign")
+def assign_regulatory_sources(req: AssignSourcesRequest):
+    """Assign (or unassign) a batch of regulatory sources to a project."""
+    if not req.source_ids:
+        return {"assigned": 0}
+    conn = _get_connection()
+    try:
+        n = assign_sources_to_project(conn, [str(sid) for sid in req.source_ids], req.project_id)
+        return {"assigned": n}
+    finally:
+        conn.close()
+
+
 # --- Evaluations (EIS document uploads) ------------------------------------
 
 def _run_evaluation_ingest_background(evaluation_id: int, correlation_id: str) -> None:
@@ -791,10 +904,25 @@ def _run_evaluation_ingest_background(evaluation_id: int, correlation_id: str) -
 
 
 @app.get("/api/evaluations")
-def list_evaluations_endpoint():
+def list_evaluations_endpoint(project_id: Optional[int] = None):
     conn = _get_connection()
     try:
+        if project_id is not None:
+            return {"documents": list_evaluations_by_project(conn, project_id)}
         return {"documents": list_evaluations_repo(conn)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/score/{project_id}")
+def get_evaluation_score_by_project(project_id: int):
+    """Fetch the saved evaluation score for a project."""
+    conn = _get_connection()
+    try:
+        score = get_score(conn, project_id)
+        if score is None:
+            raise HTTPException(status_code=404, detail="No score found for this project")
+        return score
     finally:
         conn.close()
 
@@ -815,6 +943,7 @@ def get_evaluation_endpoint(eid: int):
 async def upload_evaluation(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    project_id: int = Form(...),
 ):
     if file.content_type not in ("application/pdf", "application/x-pdf", "binary/octet-stream"):
         raise HTTPException(status_code=400, detail="file must be a PDF")
@@ -845,6 +974,7 @@ async def upload_evaluation(
         row = insert_evaluation(
             conn, filename=fname, sha256=sha,
             size_bytes=len(blob), blob=blob,
+            project_id=project_id,
         )
         # New row → ingest. Failed dupe → re-queue (retry intent).
         # Ready/embedding/pending dupes → return as-is (no double work).
@@ -949,6 +1079,21 @@ def delete_evaluation_endpoint(eid: int):
             )
         if delete_evaluation_repo(conn, eid) == 0:
             raise HTTPException(status_code=404, detail="evaluation not found")
+    finally:
+        conn.close()
+
+
+class AssignProjectRequest(BaseModel):
+    project_id: Optional[int] = None
+
+
+@app.patch("/api/evaluations/{eid}/project", status_code=200)
+def assign_evaluation_project(eid: int, req: AssignProjectRequest):
+    conn = _get_connection()
+    try:
+        if not update_evaluation_project(conn, eid, req.project_id):
+            raise HTTPException(status_code=404, detail="evaluation not found")
+        return get_evaluation_by_id(conn, eid)
     finally:
         conn.close()
 
@@ -1086,22 +1231,32 @@ def clear_db_table(table_name: str):
 
 class ScoreRequest(BaseModel):
     project_id: int
-    eval_doc_id: int
 
 
 @app.post("/api/evaluations/score")
 def score_evaluation(req: ScoreRequest):
-    """Trigger evaluation scoring for a (project, EIS document) pair.
+    """Trigger evaluation scoring for a project using all linked EIS documents.
 
     Steps:
-    1. Fetch impact_matrix from impact_analysis_outputs for project_id.
-    2. Fetch or extract ground truth from EIS chunks for eval_doc_id.
-    3. Compute Category F1, Significance Accuracy, Semantic Coverage.
-    4. Upsert result to evaluation_scores and return it.
+    1. Fetch all ready eval docs linked to the project.
+    2. Fetch impact_matrix from impact_analysis_outputs for project_id.
+    3. Fetch or extract ground truth merged across all linked docs.
+    4. Compute Category F1, Significance Accuracy, Semantic Coverage.
+    5. Upsert result to evaluation_scores (one row per project) and return it.
     """
     conn = _get_connection()
     try:
-        # 1. Load impact matrix
+        # 1. Find all ready eval docs for this project
+        eval_docs = list_evaluations_by_project(conn, req.project_id)
+        if not eval_docs:
+            raise HTTPException(
+                status_code=422,
+                detail="No ready EIS documents linked to this project. "
+                       "Upload and ingest at least one document assigned to this project.",
+            )
+        eval_ids = [d["id"] for d in eval_docs]
+
+        # 2. Load impact matrix
         cur = conn.cursor()
         cur.execute(
             "SELECT output FROM impact_analysis_outputs WHERE project_id = %s",
@@ -1117,50 +1272,56 @@ def score_evaluation(req: ScoreRequest):
             )
         impact_matrix = (row[0] or {}).get("impact_matrix") or row[0] or {}
 
-        # 2. Get or extract ground truth (cached per evaluation document)
-        gt_record = get_ground_truth(conn, req.eval_doc_id)
-        if gt_record is None:
-            from llm.provider_factory import get_llm_provider
-            llm = get_llm_provider()
-            categories, model_name = extract_ground_truth(
-                conn, req.eval_doc_id, llm
-            )
-            if not categories:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Ground truth extraction returned no categories. "
-                           "Ensure the EIS document is fully ingested (status=ready).",
-                )
-            upsert_ground_truth(conn, req.eval_doc_id, categories, model_name)
-            ground_truth = categories
-        else:
-            ground_truth = gt_record["categories"]
+        # 3. Extract ground truth merged across all linked docs
+        from llm.provider_factory import get_llm_provider
+        llm = get_llm_provider()
 
-        # 3. Compute scores
+        # Use cached per-doc ground truth where available, re-extract only if missing
+        merged_categories: dict[str, dict] = {}
+        _SCALE = {"significant": 3, "moderate": 2, "minimal": 1, "none": 0}
+        last_model = "none"
+
+        for eid in eval_ids:
+            gt_record = get_ground_truth(conn, eid)
+            if gt_record is None:
+                cats, model_name = extract_ground_truth(conn, eid, llm)
+                if cats:
+                    upsert_ground_truth(conn, eid, cats, model_name)
+                    last_model = model_name
+            else:
+                cats = gt_record["categories"]
+                last_model = gt_record.get("llm_model") or last_model
+
+            for cat in cats:
+                name = cat["category_name"]
+                existing = merged_categories.get(name)
+                if existing is None:
+                    merged_categories[name] = cat
+                elif _SCALE.get(cat["significance"], 0) > _SCALE.get(existing["significance"], 0):
+                    merged_categories[name] = cat
+
+        ground_truth = list(merged_categories.values())
+        if not ground_truth:
+            raise HTTPException(
+                status_code=422,
+                detail="Ground truth extraction returned no categories. "
+                       "Ensure all linked EIS documents are fully ingested (status=ready).",
+            )
+
+        # 4. Compute scores across all linked eval docs
         scores = compute_scores(
             impact_matrix,
             ground_truth,
             conn,
-            req.eval_doc_id,
+            eval_ids,
             app.state.embedding_provider,
         )
 
-        # 4. Persist and return
-        result = upsert_score(conn, req.project_id, req.eval_doc_id, scores)
+        # 5. Persist and return (one score per project)
+        result = upsert_score(conn, req.project_id, scores)
         return result
 
     finally:
         conn.close()
 
 
-@app.get("/api/evaluations/score/{project_id}/{eval_doc_id}")
-def get_evaluation_score(project_id: int, eval_doc_id: int):
-    """Fetch a previously computed score."""
-    conn = _get_connection()
-    try:
-        score = get_score(conn, project_id, eval_doc_id)
-        if score is None:
-            raise HTTPException(status_code=404, detail="Score not found")
-        return score
-    finally:
-        conn.close()

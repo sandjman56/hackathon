@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import ProjectForm from './components/ProjectForm.jsx'
 import AgentPipeline from './components/AgentPipeline.jsx'
 import ResultsPanel from './components/ResultsPanel.jsx'
 import BrainScanner from './components/BrainScanner.jsx'
+import Globe from './components/Globe.jsx'
 import DatabaseView from './components/DatabaseView.jsx'
 import EvaluationsView from './components/EvaluationsView.jsx'
 import EvaluationChunksView from './components/EvaluationChunksView.jsx'
@@ -31,7 +32,56 @@ function App() {
   const { selections, setSelection, availableProviders, modelCatalog } = useModelSelections()
   const [agentCosts, setAgentCosts] = useState({})
   const [currentProjectId, setCurrentProjectId] = useState(null)
+  const [projectInfo, setProjectInfo] = useState({ projectName: '', coordinates: '' })
   const [saveResultsFlash, setSaveResultsFlash] = useState(null) // null | 'saving' | 'saved' | 'error'
+  const [pendingOverwrite, setPendingOverwrite] = useState(null) // null | {saved_at}
+  const [systemStatus, setSystemStatus] = useState('checking') // 'checking'|'online'|'pending'|'offline'
+  const statusTimerRef = useRef(null)
+  const globeContainerRef = useRef(null)
+  const [globeSize, setGlobeSize] = useState(200)
+
+  useEffect(() => {
+    const apiBase = import.meta.env.VITE_API_URL ?? ''
+
+    const check = async () => {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000)
+      let next = 'offline'
+      try {
+        const res = await fetch(`${apiBase}/api/health`, { signal: controller.signal })
+        clearTimeout(timeoutId)
+        next = res.ok ? 'online' : 'pending'
+      } catch (err) {
+        clearTimeout(timeoutId)
+        // AbortError means the 8s timeout fired — server is reachable but
+        // not responding yet (Render spinning a free dyno back up).
+        next = err.name === 'AbortError' ? 'pending' : 'offline'
+      }
+      setSystemStatus(next)
+      // Poll more aggressively when not online so we catch spin-up quickly.
+      statusTimerRef.current = setTimeout(check, next === 'online' ? 30000 : 12000)
+    }
+
+    check()
+    return () => {
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!globeContainerRef.current) return
+    const rect = globeContainerRef.current.getBoundingClientRect()
+    const s = Math.min(Math.floor(rect.height), Math.floor(rect.width))
+    if (s > 0) setGlobeSize(s)
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const s = Math.min(Math.floor(e.contentRect.height), Math.floor(e.contentRect.width))
+        if (s > 0) setGlobeSize(s)
+      }
+    })
+    ro.observe(globeContainerRef.current)
+    return () => ro.disconnect()
+  }, [])
 
   const handleCostUpdate = (data) => {
     setAgentCosts((prev) => ({ ...prev, [data.agent]: data }))
@@ -87,16 +137,18 @@ function App() {
     })
   }
 
-  const handleSaveResults = async () => {
+  const handleSaveResults = async (force = false) => {
     if (!currentProjectId) {
       setSaveResultsFlash('error')
       setTimeout(() => setSaveResultsFlash(null), 2000)
       return
     }
     setSaveResultsFlash('saving')
+    setPendingOverwrite(null)
     try {
       const apiBase = import.meta.env.VITE_API_URL ?? ''
-      const res = await fetch(`${apiBase}/api/projects/${currentProjectId}/outputs`, {
+      const url = `${apiBase}/api/projects/${currentProjectId}/save-run${force ? '?force=true' : ''}`
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -104,6 +156,12 @@ function App() {
           agent_costs: agentCosts,
         }),
       })
+      if (res.status === 409) {
+        const body = await res.json()
+        setSaveResultsFlash(null)
+        setPendingOverwrite({ saved_at: body.saved_at })
+        return
+      }
       if (!res.ok) throw new Error('save failed')
       setSaveResultsFlash('saved')
       setTimeout(() => setSaveResultsFlash(null), 1500)
@@ -118,9 +176,16 @@ function App() {
       {/* Header */}
       <header style={styles.header}>
         <div style={styles.headerLeft}>
-          <span style={styles.pulsingDot} />
-          <span style={styles.title}>EIA AGENT</span>
-          <span style={styles.version}>v0.1.0</span>
+          <svg width="20" height="28" viewBox="0 0 100 140" fill="none" style={{ filter: 'drop-shadow(0 0 6px #00ff87)', flexShrink: 0 }}>
+            <g fill="#00ff87">
+              <path d="M 50 4 L 52 80 L 50 90 L 48 80 Z"/>
+              <path d="M 22 44 C 16 60, 24 80, 50 86 C 76 80, 84 60, 78 44 C 80 52, 72 68, 50 76 C 28 68, 20 52, 22 44 Z"/>
+            </g>
+          </svg>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+            <span style={styles.title}>CLEAVER</span>
+            <span style={styles.subtitle}>Customized Environmental Impact Reports</span>
+          </div>
         </div>
         <div style={styles.headerRight}>
           <button
@@ -135,7 +200,14 @@ function App() {
           >
             VIEW DB
           </button>
-          <span style={styles.statusChip}>SYSTEM ONLINE</span>
+          <span style={{
+            ...styles.statusChip,
+            color: STATUS_CONFIG[systemStatus].color,
+            borderColor: STATUS_CONFIG[systemStatus].color,
+            background: STATUS_CONFIG[systemStatus].bg,
+          }}>
+            {STATUS_CONFIG[systemStatus].label}
+          </span>
         </div>
       </header>
 
@@ -168,7 +240,8 @@ function App() {
               onRunningChange={handleRunningChange}
               modelSelections={selections}
               onCostUpdate={handleCostUpdate}
-              onProjectIdChange={setCurrentProjectId}
+              onProjectIdChange={(id) => { setCurrentProjectId(id); setPendingOverwrite(null) }}
+              onProjectInfoChange={setProjectInfo}
               onLoadOutputs={(outputs, costs, pipelineStatus) => {
                 setAgentOutputs(outputs)
                 setAgentCosts(costs)
@@ -205,38 +278,75 @@ function App() {
             <div style={styles.colMiddleBottom}>
               <ResultsPanel results={results} />
               {!running && Object.keys(agentOutputs).length > 0 && (
-                <button
-                  onClick={handleSaveResults}
-                  disabled={saveResultsFlash === 'saving'}
-                  style={{
-                    ...styles.saveResultsBtn,
-                    ...(saveResultsFlash === 'saved' ? styles.saveResultsBtnSaved : {}),
-                    ...(saveResultsFlash === 'error' ? styles.saveResultsBtnError : {}),
-                  }}
-                >
-                  {saveResultsFlash === 'saving' ? 'SAVING...'
-                    : saveResultsFlash === 'saved' ? 'SAVED!'
-                    : saveResultsFlash === 'error' ? 'SAVE PROJECT FIRST'
-                    : 'SAVE RESULTS'}
-                </button>
+                <div style={{ marginTop: '12px' }}>
+                  <button
+                    onClick={() => handleSaveResults(false)}
+                    disabled={saveResultsFlash === 'saving'}
+                    style={{
+                      ...styles.saveResultsBtn,
+                      ...(saveResultsFlash === 'saved' ? styles.saveResultsBtnSaved : {}),
+                      ...(saveResultsFlash === 'error' ? styles.saveResultsBtnError : {}),
+                    }}
+                  >
+                    {saveResultsFlash === 'saving' ? 'SAVING...'
+                      : saveResultsFlash === 'saved' ? 'SAVED ✓'
+                      : saveResultsFlash === 'error' ? 'ERROR — TRY AGAIN'
+                      : 'SAVE RESULTS'}
+                  </button>
+                  {pendingOverwrite && (
+                    <div style={styles.overwriteWarning}>
+                      <span>Results saved {new Date(pendingOverwrite.saved_at).toLocaleString()} already exist.</span>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                        <button
+                          style={styles.overwriteConfirmBtn}
+                          onClick={() => handleSaveResults(true)}
+                        >
+                          CONFIRM OVERWRITE
+                        </button>
+                        <button
+                          style={styles.overwriteCancelBtn}
+                          onClick={() => setPendingOverwrite(null)}
+                        >
+                          CANCEL
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
 
           <div style={styles.separator} />
 
-          {/* Right: brain scanner */}
+          {/* Right: globe + brain scanner */}
           <div style={styles.colRight}>
-            <BrainScanner
-              logs={logs}
-              running={running}
-              onCommand={handleCommand}
-            />
+            <div ref={globeContainerRef} style={styles.globeWrapper}>
+              <Globe
+                projectName={projectInfo.projectName}
+                coordinates={projectInfo.coordinates}
+                size={globeSize}
+              />
+            </div>
+            <div style={styles.brainScannerWrapper}>
+              <BrainScanner
+                logs={logs}
+                running={running}
+                onCommand={handleCommand}
+              />
+            </div>
           </div>
         </div>
       )}
     </div>
   )
+}
+
+const STATUS_CONFIG = {
+  checking: { label: 'CHECKING...', color: 'var(--text-muted)', bg: 'transparent', dot: 'var(--text-muted)' },
+  online:   { label: 'SYSTEM ONLINE',   color: 'var(--green-primary)', bg: 'var(--green-dim)',          dot: 'var(--green-primary)' },
+  pending:  { label: 'SYSTEM PENDING',  color: '#f0a500',              bg: 'rgba(240,165,0,0.1)',        dot: '#f0a500' },
+  offline:  { label: 'SYSTEM OFFLINE',  color: 'var(--red-alert)',     bg: 'rgba(255,68,68,0.1)',        dot: 'var(--red-alert)' },
 }
 
 const pulseKeyframes = `
@@ -272,13 +382,6 @@ const styles = {
     alignItems: 'center',
     gap: '12px',
   },
-  pulsingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    background: 'var(--green-primary)',
-    animation: 'pulse 2s ease-in-out infinite',
-  },
   title: {
     fontFamily: 'var(--font-mono)',
     fontSize: '14px',
@@ -286,10 +389,14 @@ const styles = {
     color: 'var(--green-primary)',
     letterSpacing: '2px',
   },
-  version: {
+  subtitle: {
     fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
+    fontSize: '9px',
     color: 'var(--text-muted)',
+    letterSpacing: '0.5px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   headerRight: {
     display: 'flex',
@@ -333,7 +440,7 @@ const styles = {
     flexShrink: 0,
   },
   colMiddle: {
-    width: '28%',
+    width: '38%',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -352,33 +459,80 @@ const styles = {
   },
   colRight: {
     flex: 1,
-    padding: '20px',
+    minWidth: '200px',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 0,
+  },
+  globeWrapper: {
+    flex: 1,
+    overflow: 'hidden',
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'flex-start',
+  },
+  brainScannerWrapper: {
+    flex: 1,
+    padding: '0 20px 20px 20px',
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
   },
   saveResultsBtn: {
     width: '100%',
-    marginTop: '12px',
-    padding: '10px',
-    background: 'transparent',
-    color: 'var(--green-primary)',
+    padding: '12px',
+    background: 'var(--green-primary)',
+    color: '#0a0a0a',
     border: '1px solid var(--green-primary)',
     borderRadius: '4px',
     fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    fontWeight: 600,
+    fontSize: '12px',
+    fontWeight: 700,
     letterSpacing: '2px',
     cursor: 'pointer',
-    transition: 'background 0.15s, color 0.15s',
+    transition: 'opacity 0.15s',
   },
   saveResultsBtnSaved: {
-    background: 'var(--green-primary)',
-    color: '#0a0a0a',
+    opacity: 0.8,
   },
   saveResultsBtnError: {
-    borderColor: '#ff4444',
+    background: 'transparent',
     color: '#ff4444',
+    borderColor: '#ff4444',
+  },
+  overwriteWarning: {
+    marginTop: '10px',
+    padding: '10px 12px',
+    background: 'rgba(255,170,0,0.08)',
+    border: '1px solid #ffaa00',
+    borderRadius: '4px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    color: '#ffaa00',
+    lineHeight: 1.5,
+  },
+  overwriteConfirmBtn: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '9px',
+    letterSpacing: '1px',
+    color: '#0a0a0a',
+    background: '#ffaa00',
+    border: '1px solid #ffaa00',
+    borderRadius: '3px',
+    padding: '4px 10px',
+    cursor: 'pointer',
+  },
+  overwriteCancelBtn: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '9px',
+    letterSpacing: '1px',
+    color: 'var(--text-muted)',
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    borderRadius: '3px',
+    padding: '4px 10px',
+    cursor: 'pointer',
   },
 }
 

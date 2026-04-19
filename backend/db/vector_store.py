@@ -71,6 +71,14 @@ def init_db():
                     UNIQUE (project_id)
                 );
             """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id         SERIAL PRIMARY KEY,
+                project_id INTEGER UNIQUE NOT NULL
+                    REFERENCES projects(id) ON DELETE CASCADE,
+                saved_at   TIMESTAMPTZ DEFAULT NOW()
+            );
+        """)
         conn.commit()
         cur.close()
 

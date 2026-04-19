@@ -82,6 +82,7 @@ Uploaded EIS PDFs tracked through the ingest pipeline (pending → embedding →
 | `embedding_dim` | integer | YES | |
 | `started_at` | timestamptz | YES | |
 | `finished_at` | timestamptz | YES | |
+| `project_id` | integer | YES | FK → `projects.id` ON DELETE SET NULL |
 
 **Status lifecycle:** `pending` → `embedding` → `ready` | `failed`
 
@@ -154,6 +155,11 @@ Uploaded regulatory documents (PDFs or eCFR XML). Tracks ingest status and eCFR 
 | `effective_date` | date | YES | |
 | `cfr_title` | integer | YES | |
 | `cfr_part` | text | YES | |
+| `project_id` | integer | YES | FK → `projects.id` ON DELETE SET NULL |
+
+**Relationships:** `project_id` → `projects.id` (ON DELETE SET NULL). One source belongs to at most one project. When a project is deleted its sources become unassigned (not deleted).
+
+**Write path:** Set via `PATCH /api/regulations/sources/assign` (`assign_sources_to_project` in `db/regulatory_sources.py`). During pipeline execution, `RegulatoryScreeningAgent` queries source IDs for the run's `project_id` and restricts RAG retrieval to those sources only. Falls back to all sources if none are assigned to the project.
 
 ---
 
@@ -205,15 +211,32 @@ LLM-extracted ground truth cache per EIS document. Populated on first `POST /api
 
 ---
 
-## evaluation_scores
+## pipeline_runs
 
-Computed evaluation scores for a (project_run, EIS_document) pair. Written by `POST /api/evaluations/score`, read by `GET /api/evaluations/score/{project_id}/{eval_doc_id}`.
+One saved pipeline run per project. Created/overwritten when the user clicks SAVE RESULTS after a pipeline completes. Provides a stable `run_id` anchor for evaluation scoring.
 
 | Column | Type | Nullable | Default |
 |--------|------|----------|---------|
 | `id` | integer | NO | `nextval(...)` |
-| `project_id` | integer | NO | |
-| `evaluation_id` | integer | NO | |
+| `project_id` | integer | NO | FK → `projects.id` (CASCADE), UNIQUE |
+| `saved_at` | timestamptz | YES | `now()` |
+
+**Write path:** `POST /api/projects/{id}/save-run` — UPSERTs this row + all 5 agent output tables atomically. Returns `409` if a run already exists and `?force=true` is not set.
+
+**Read path:** `GET /api/projects/{id}/run` — returns `{run_id, saved_at}` or `{run: null}`.
+
+---
+
+## evaluation_scores
+
+One evaluation score per project, aggregated across all EIS documents linked to that project. Written by `POST /api/evaluations/score`, read by `GET /api/evaluations/score/{project_id}`.
+
+| Column | Type | Nullable | Default |
+|--------|------|----------|---------|
+| `id` | integer | NO | `nextval(...)` |
+| `project_id` | integer | NO | FK → `projects.id` (CASCADE) |
+| `evaluation_id` | integer | YES | legacy FK → `evaluations.id` (SET NULL) |
+| `run_id` | integer | YES | FK → `pipeline_runs.id` (SET NULL) — future use, currently always NULL |
 | `scored_at` | timestamptz | NO | `now()` |
 | `category_f1` | numeric(6,4) | YES | |
 | `category_precision` | numeric(6,4) | YES | |
@@ -223,7 +246,7 @@ Computed evaluation scores for a (project_run, EIS_document) pair. Written by `P
 | `overall_score` | numeric(6,4) | YES | |
 | `detail` | jsonb | NO | `{}` |
 
-**Relationships:** `project_id` → `projects.id` (CASCADE), `evaluation_id` → `evaluations.id` (CASCADE). UNIQUE on `(project_id, evaluation_id)` — re-scoring overwrites via UPSERT.
+**Relationships:** `project_id` → `projects.id` (CASCADE). UNIQUE on `project_id` — re-scoring a project overwrites its previous result via UPSERT. Ground truth is merged from all `evaluations` rows where `project_id` matches and `status = 'ready'`.
 
 **`detail` JSONB shape:**
 ```json

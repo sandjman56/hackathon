@@ -39,6 +39,13 @@ def client():
         pf.get_embedding_provider = pf_orig
 
 
+@pytest.fixture
+def project_id(client):
+    r = client.post("/api/projects", json={"name": "Test Project", "coordinates": "0,0", "description": ""})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
 def _wait_ready(client, eid, timeout=15):
     for _ in range(timeout * 2):
         r = client.get(f"/api/evaluations/{eid}")
@@ -49,11 +56,12 @@ def _wait_ready(client, eid, timeout=15):
     raise AssertionError("evaluation did not finish in time")
 
 
-def test_upload_and_ingest_happy(client):
+def test_upload_and_ingest_happy(client, project_id):
     pdf = build_sample_eis_bytes()
     r = client.post(
         "/api/evaluations",
         files={"file": ("sample.pdf", BytesIO(pdf), "application/pdf")},
+        data={"project_id": project_id},
     )
     assert r.status_code == 201, r.text
     body = r.json()
@@ -78,10 +86,11 @@ def test_upload_and_ingest_happy(client):
     assert "similarity" in search["results"][0]
 
 
-def test_reingest_endpoint(client):
+def test_reingest_endpoint(client, project_id):
     pdf = build_sample_eis_bytes()
     r = client.post("/api/evaluations",
-                    files={"file": ("r.pdf", BytesIO(pdf), "application/pdf")})
+                    files={"file": ("r.pdf", BytesIO(pdf), "application/pdf")},
+                    data={"project_id": project_id})
     eid = r.json()["id"]
     _wait_ready(client, eid)
 
@@ -91,19 +100,22 @@ def test_reingest_endpoint(client):
     assert final["status"] == "ready"
 
 
-def test_duplicate_upload_returns_existing(client):
+def test_duplicate_upload_returns_existing(client, project_id):
     pdf = build_sample_eis_bytes()
     r1 = client.post("/api/evaluations",
-                     files={"file": ("d.pdf", BytesIO(pdf), "application/pdf")})
+                     files={"file": ("d.pdf", BytesIO(pdf), "application/pdf")},
+                     data={"project_id": project_id})
     r2 = client.post("/api/evaluations",
-                     files={"file": ("d.pdf", BytesIO(pdf), "application/pdf")})
+                     files={"file": ("d.pdf", BytesIO(pdf), "application/pdf")},
+                     data={"project_id": project_id})
     assert r1.json()["id"] == r2.json()["id"]
 
 
-def test_delete_cascade(client):
+def test_delete_cascade(client, project_id):
     pdf = build_sample_eis_bytes()
     r = client.post("/api/evaluations",
-                    files={"file": ("del.pdf", BytesIO(pdf), "application/pdf")})
+                    files={"file": ("del.pdf", BytesIO(pdf), "application/pdf")},
+                    data={"project_id": project_id})
     eid = r.json()["id"]
     _wait_ready(client, eid)
 

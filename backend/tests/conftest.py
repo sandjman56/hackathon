@@ -77,3 +77,14 @@ def stub_embedder():
 def sample_eis_bytes() -> bytes:
     from tests.fixtures.eis.build_sample import build_sample_eis_bytes
     return build_sample_eis_bytes()
+
+
+@pytest.fixture
+def project_id(db_conn):
+    """Insert a minimal project row and return its id."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO projects (name, coordinates, description) VALUES (%s, %s, %s) RETURNING id",
+            ("Test Project", "0,0", ""),
+        )
+        return cur.fetchone()[0]

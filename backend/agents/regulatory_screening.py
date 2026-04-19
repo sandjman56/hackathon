@@ -5,6 +5,7 @@ import time
 import uuid
 
 from db.vector_store import _get_connection
+from db.regulatory_sources import get_source_ids_for_project
 from llm.base import LLMProvider
 from rag.regulatory.store import search_regulations
 
@@ -83,22 +84,45 @@ class RegulatoryScreeningAgent:
         log("embedded query in %.2fs dim=%d",
             time.time() - t0, len(query_vec))
 
+        project_id = state.get("project_id")
+
         conn = _get_connection()
         try:
-            # Log corpus composition so it's obvious how much of the retriever
-            # ceiling is "only the NEPA PDF is loaded".
             self._log_corpus_stats(conn, log, warn)
+
+            # Project-scoped source filtering: use only sources assigned to
+            # this project. Fall back to all sources if none are assigned.
+            source_ids: list[str] | None = None
+            if project_id is not None:
+                assigned = get_source_ids_for_project(conn, project_id)
+                if assigned:
+                    source_ids = assigned
+                    log(
+                        "project_id=%s: restricting RAG to %d assigned source(s): %s",
+                        project_id, len(assigned), assigned,
+                    )
+                else:
+                    warn(
+                        "project_id=%s: no ready sources assigned — "
+                        "falling back to all available sources",
+                        project_id,
+                    )
+
             hits = search_regulations(
                 conn, query_vec, top_k=_TOP_K,
                 filters={"is_current": True},
+                source_ids=source_ids,
             )
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
-        log("retrieved %d chunks (top_k=%d, filter is_current=True)",
-            len(hits), _TOP_K)
+        log(
+            "retrieved %d chunks (top_k=%d, filter is_current=True, source_filter=%s)",
+            len(hits), _TOP_K,
+            f"{len(source_ids)} source(s)" if source_ids else "all",
+        )
 
         if not hits:
             warn("empty corpus or zero hits — returning []")

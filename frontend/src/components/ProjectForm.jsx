@@ -14,7 +14,7 @@ const AGENTS = [
   'report_synthesis',
 ]
 
-export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate, onProjectIdChange, onLoadOutputs }) {
+export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate, onProjectIdChange, onLoadOutputs, onProjectInfoChange }) {
   const [projectName, setProjectName] = useState('')
   const [coordinates, setCoordinates] = useState('')
   const [description, setDescription] = useState('')
@@ -23,6 +23,10 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
   const [saveFlash, setSaveFlash] = useState(false)
 
   const apiBase = import.meta.env.VITE_API_URL ?? ''
+
+  useEffect(() => {
+    onProjectInfoChange?.({ projectName, coordinates })
+  }, [projectName, coordinates, onProjectInfoChange])
 
   useEffect(() => {
     fetch(`${apiBase}/api/projects`)
@@ -65,25 +69,24 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
       if (!res.ok) return
       const data = await res.json()
 
-      const outputs = data.agent_outputs || {}
-      const costs = data.agent_costs || {}
-
-      // Build pipeline status: "complete" if output exists, "idle" otherwise
-      const pipelineStatus = {}
+      // API returns flat shape: { project_parser: {output, model, ...} | null, ... }
       const agentNames = [
         'project_parser', 'environmental_data', 'regulatory_screening',
         'impact_analysis', 'report_synthesis',
       ]
-      for (const name of agentNames) {
-        pipelineStatus[name] = outputs[name] ? 'complete' : 'idle'
-      }
-
-      // Reconstruct agentCosts to match the SSE shape (include "agent" key)
+      const outputs = {}
       const formattedCosts = {}
       for (const name of agentNames) {
-        if (costs[name]) {
-          formattedCosts[name] = { agent: name, ...costs[name] }
+        const entry = data[name]
+        outputs[name] = entry?.output ?? null
+        if (entry?.model != null) {
+          formattedCosts[name] = { agent: name, model: entry.model, input_tokens: entry.input_tokens, output_tokens: entry.output_tokens, cost_usd: entry.cost_usd }
         }
+      }
+
+      const pipelineStatus = {}
+      for (const name of agentNames) {
+        pipelineStatus[name] = outputs[name] ? 'complete' : 'idle'
       }
 
       onLoadOutputs?.(outputs, formattedCosts, pipelineStatus)

@@ -10,7 +10,7 @@ const AGENT_SECTIONS = [
   { key: 'report_synthesis', label: 'REPORT SYNTHESIS' },
 ]
 
-export default function RunPreviewPanel() {
+export default function RunPreviewPanel({ onProjectSelect }) {
   const [projects, setProjects] = useState([])
   const [loadingProjects, setLoadingProjects] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -24,7 +24,7 @@ export default function RunPreviewPanel() {
     setLoadingProjects(true)
     setError(null)
     try {
-      const res = await fetch(`${apiBase}/api/projects`)
+      const res = await fetch(`${apiBase}/api/pipeline-runs`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setProjects(Array.isArray(data) ? data : [])
@@ -44,13 +44,16 @@ export default function RunPreviewPanel() {
     setPickerOpen(true)
   }
 
-  const handleSelect = async (project) => {
+  const handleSelect = async (run) => {
     setPickerOpen(false)
-    setSelectedProject(project)
+    // Normalize: expose `id` as project_id so downstream consumers (EvaluatePanel) work unchanged
+    const normalized = { ...run, id: run.project_id }
+    setSelectedProject(normalized)
+    onProjectSelect?.(normalized)
     setLoadingOutputs(true)
     setError(null)
     try {
-      const res = await fetch(`${apiBase}/api/projects/${project.id}/outputs`)
+      const res = await fetch(`${apiBase}/api/projects/${run.project_id}/outputs`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setOutputs(data)
@@ -82,17 +85,17 @@ export default function RunPreviewPanel() {
           {loadingProjects ? (
             <div style={styles.pickerItem}>Loading...</div>
           ) : projects.length === 0 ? (
-            <div style={styles.pickerItem}>No projects found</div>
+            <div style={styles.pickerItem}>No saved runs found</div>
           ) : (
             projects.map((p) => (
               <button
-                key={p.id}
+                key={p.run_id}
                 style={styles.pickerItem}
                 onClick={() => handleSelect(p)}
               >
                 <span style={styles.pickerName}>{p.name}</span>
                 <span style={styles.pickerMeta}>
-                  {p.coordinates} &middot; {p.savedAt ? new Date(p.savedAt).toLocaleDateString() : '—'}
+                  {p.coordinates} &middot; {p.run_saved_at ? new Date(p.run_saved_at).toLocaleDateString() : '—'}
                 </span>
               </button>
             ))

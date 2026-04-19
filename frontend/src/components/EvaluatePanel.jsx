@@ -160,36 +160,46 @@ function CategoryTable({ perCategory }) {
   )
 }
 
-export default function EvaluatePanel() {
-  const [projects, setProjects] = useState([])
-  const [evalDocs, setEvalDocs] = useState([])
-  const [selectedProject, setSelectedProject] = useState('')
-  const [selectedDoc, setSelectedDoc] = useState('')
+export default function EvaluatePanel({ selectedProject }) {
+  const [linkedDocs, setLinkedDocs] = useState([])
   const [loading, setLoading] = useState(false)
   const [scores, setScores] = useState(null)
   const [error, setError] = useState(null)
   const [showDetail, setShowDetail] = useState(false)
+  const [savedRun, setSavedRun] = useState(null) // null | {run_id, saved_at}
 
+  // When project changes: load linked docs + auto-load saved score + check run
   useEffect(() => {
-    fetch(`${apiBase}/api/projects`)
+    setScores(null)
+    setError(null)
+    setLinkedDocs([])
+    setSavedRun(null)
+    if (!selectedProject) return
+
+    fetch(`${apiBase}/api/evaluations?project_id=${selectedProject.id}`)
       .then(r => r.json())
-      .then(data => setProjects(Array.isArray(data) ? data : []))
+      .then(data => setLinkedDocs(data.documents || []))
       .catch(() => {})
 
-    fetch(`${apiBase}/api/evaluations`)
-      .then(r => r.json())
-      .then(data => setEvalDocs((data.documents || []).filter(d => d.status === 'ready')))
+    fetch(`${apiBase}/api/evaluations/score/${selectedProject.id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setScores(data) })
       .catch(() => {})
-  }, [])
+
+    fetch(`${apiBase}/api/projects/${selectedProject.id}/run`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.run_id) setSavedRun(data) })
+      .catch(() => {})
+  }, [selectedProject?.id])
 
   const handleEvaluate = async () => {
-    if (!selectedProject || !selectedDoc) return
+    if (!selectedProject) return
     setLoading(true); setError(null); setScores(null)
     try {
       const res = await fetch(`${apiBase}/api/evaluations/score`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: +selectedProject, eval_doc_id: +selectedDoc }),
+        body: JSON.stringify({ project_id: selectedProject.id }),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -203,7 +213,7 @@ export default function EvaluatePanel() {
     }
   }
 
-  const ready = selectedProject && selectedDoc && !loading
+  const canEvaluate = selectedProject && linkedDocs.length > 0 && savedRun !== null && !loading
   const detail = scores?.detail || {}
   const perCat  = detail.per_category || {}
 
@@ -215,46 +225,35 @@ export default function EvaluatePanel() {
         <InfoButton />
       </div>
 
-      {/* Selectors */}
-      <div style={styles.selectors}>
-        <div style={styles.selectGroup}>
-          <label style={styles.selectLabel}>PROJECT RUN</label>
-          <select
-            style={styles.select}
-            value={selectedProject}
-            onChange={e => { setSelectedProject(e.target.value); setScores(null) }}
-          >
-            <option value="">— select project —</option>
-            {projects.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+      {/* Project info + linked docs */}
+      {!selectedProject ? (
+        <div style={styles.noProject}>Select a project to evaluate it.</div>
+      ) : (
+        <div style={styles.projectInfo}>
+          <div style={styles.projectInfoRow}>
+            <span style={styles.projectInfoLabel}>PROJECT</span>
+            <span style={styles.projectInfoVal}>{selectedProject.name}</span>
+          </div>
+          <div style={styles.projectInfoRow}>
+            <span style={styles.projectInfoLabel}>EIS DOCS</span>
+            <span style={styles.projectInfoVal}>
+              {linkedDocs.length === 0
+                ? <span style={styles.noDocsHint}>No linked docs — assign project when uploading.</span>
+                : linkedDocs.map(d => (
+                    <span key={d.id} style={styles.docPill}>{d.filename}</span>
+                  ))
+              }
+            </span>
+          </div>
         </div>
-
-        <div style={styles.selectGroup}>
-          <label style={styles.selectLabel}>EIS DOCUMENT</label>
-          <select
-            style={styles.select}
-            value={selectedDoc}
-            onChange={e => { setSelectedDoc(e.target.value); setScores(null) }}
-          >
-            <option value="">— select document —</option>
-            {evalDocs.map(d => (
-              <option key={d.id} value={d.id}>{d.filename}</option>
-            ))}
-          </select>
-          {evalDocs.length === 0 && (
-            <span style={styles.noDocsHint}>No ready EIS documents — upload one above.</span>
-          )}
-        </div>
-      </div>
+      )}
 
       <button
-        style={{ ...styles.evalBtn, opacity: ready ? 1 : 0.5, cursor: ready ? 'pointer' : 'not-allowed' }}
+        style={{ ...styles.evalBtn, opacity: canEvaluate ? 1 : 0.5, cursor: canEvaluate ? 'pointer' : 'not-allowed' }}
         onClick={handleEvaluate}
-        disabled={!ready}
+        disabled={!canEvaluate}
       >
-        {loading ? 'EVALUATING…' : 'EVALUATE'}
+        {loading ? 'EVALUATING…' : scores ? 'RE-EVALUATE' : 'EVALUATE'}
       </button>
 
       {error && <div style={styles.error}>Error: {error}</div>}
@@ -335,22 +334,33 @@ const styles = {
     whiteSpace: 'pre-wrap', margin: 0,
   },
 
-  // Selectors
-  selectors: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  selectGroup: { display: 'flex', flexDirection: 'column', gap: '4px' },
-  selectLabel: {
-    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
-    color: 'var(--text-muted)',
+  noProject: {
+    fontFamily: 'var(--font-mono)', fontSize: '10px',
+    color: 'var(--text-muted)', fontStyle: 'italic', padding: '4px 0',
   },
-  select: {
-    fontFamily: 'var(--font-mono)', fontSize: '11px',
-    color: 'var(--text-primary)', background: 'var(--bg-secondary)',
+  projectInfo: {
+    display: 'flex', flexDirection: 'column', gap: '6px',
+    padding: '10px', background: 'var(--bg-card)',
     border: '1px solid var(--border)', borderRadius: '4px',
-    padding: '6px 10px', cursor: 'pointer', outline: 'none',
+  },
+  projectInfoRow: { display: 'flex', alignItems: 'flex-start', gap: '10px' },
+  projectInfoLabel: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--text-muted)', minWidth: '60px', paddingTop: '2px',
+  },
+  projectInfoVal: {
+    fontFamily: 'var(--font-mono)', fontSize: '11px',
+    color: 'var(--text-primary)', display: 'flex', flexWrap: 'wrap', gap: '4px',
   },
   noDocsHint: {
     fontFamily: 'var(--font-mono)', fontSize: '9px',
     color: 'var(--text-muted)', fontStyle: 'italic',
+  },
+  docPill: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px',
+    color: 'var(--green-primary)', background: 'var(--green-dim)',
+    border: '1px solid var(--green-primary)', borderRadius: '3px',
+    padding: '1px 6px', display: 'inline-block',
   },
 
   evalBtn: {
