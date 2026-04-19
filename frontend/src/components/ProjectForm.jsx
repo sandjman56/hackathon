@@ -14,7 +14,7 @@ const AGENTS = [
   'report_synthesis',
 ]
 
-export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate, onProjectIdChange, onLoadOutputs, onProjectInfoChange }) {
+export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate, onLog, onRunningChange, modelSelections, onCostUpdate, onProjectIdChange, onLoadOutputs, onProjectInfoChange, projectId, onDurationUpdate, onPipelineStartedAt }) {
   const [projectName, setProjectName] = useState('')
   const [coordinates, setCoordinates] = useState('')
   const [description, setDescription] = useState('')
@@ -124,6 +124,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
           coordinates,
           description,
           models: modelSelections || {},
+          project_id: projectId || undefined,
         }),
       })
 
@@ -181,6 +182,7 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
     switch (eventType) {
       case 'pipeline_start':
         if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
+        if (data.started_at) onPipelineStartedAt?.(data.started_at)
         break
 
       case 'agent_start':
@@ -194,6 +196,9 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
         if (data.pipeline_status) onPipelineUpdate(data.pipeline_status)
         if (data.output !== undefined) {
           onStepsUpdate?.((prev) => ({ ...prev, [data.agent]: data.output }))
+        }
+        if (data.duration_ms != null) {
+          onDurationUpdate?.(data.agent, data.duration_ms)
         }
         break
 
@@ -283,10 +288,12 @@ export default function ProjectForm({ onResult, onPipelineUpdate, onStepsUpdate,
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || !projectId}
+          title={!projectId ? 'Save project first' : undefined}
           style={{
             ...styles.button,
             ...(loading ? styles.buttonLoading : {}),
+            ...(!projectId && !loading ? styles.saveBtnDisabled : {}),
           }}
         >
           {loading ? (

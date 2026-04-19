@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import SourcesModal from './SourcesModal.jsx'
 import ModelDropdown from './ModelDropdown.jsx'
 
@@ -290,9 +290,43 @@ export default function AgentPipeline({
   availableProviders = {},
   modelCatalog = [],
   agentCosts = {},
+  agentDurations = {},
+  pipelineRunKey = 0,
 }) {
   const [openAgent, setOpenAgent] = useState(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
+  const startTimesRef = useRef({})
+  const [, forceUpdate] = useState(0)
+
+  useEffect(() => {
+    startTimesRef.current = {}
+  }, [pipelineRunKey])
+
+  useEffect(() => {
+    AGENTS.forEach(({ key }) => {
+      if (pipelineState[key] === 'running' && !startTimesRef.current[key]) {
+        startTimesRef.current[key] = Date.now()
+      }
+    })
+  }, [pipelineState])
+
+  useEffect(() => {
+    const anyRunning = AGENTS.some(({ key }) => pipelineState[key] === 'running')
+    if (!anyRunning) return
+    const id = setInterval(() => forceUpdate((n) => n + 1), 100)
+    return () => clearInterval(id)
+  }, [pipelineState])
+
+  const getLatencyDisplay = (key) => {
+    const status = pipelineState[key]
+    if ((status === 'complete' || status === 'error') && agentDurations[key] != null) {
+      return (agentDurations[key] / 1000).toFixed(1) + 's'
+    }
+    if (status === 'running' && startTimesRef.current[key]) {
+      return ((Date.now() - startTimesRef.current[key]) / 1000).toFixed(1) + 's'
+    }
+    return '—'
+  }
 
   const toggleAgent = (key) => {
     setOpenAgent((prev) => (prev === key ? null : key))
@@ -335,6 +369,16 @@ export default function AgentPipeline({
                   modelCatalog={modelCatalog}
                 />
                 <CostChip cost={agentCosts[agent.key]?.cost_usd} />
+                <span style={{
+                  ...styles.costChip,
+                  color: status === 'complete'
+                    ? 'var(--green-primary)'
+                    : status === 'running'
+                    ? 'var(--yellow-warn)'
+                    : 'var(--text-muted)',
+                }}>
+                  {getLatencyDisplay(agent.key)}
+                </span>
                 {isRegulatory && (
                   <button
                     type="button"

@@ -1,5 +1,6 @@
 """Build EIA Agent System presentation following the 24-880 template theme."""
 import io
+import re
 import zipfile
 
 from pptx import Presentation
@@ -144,6 +145,100 @@ def col_header(slide, label, left, top, width, color=ORANGE):
     txt(slide, label, left + Inches(0.12), top + Inches(0.05),
         width - Inches(0.24), Inches(0.28),
         size=12, bold=True, color=color)
+
+
+# ── Prompts overview slide ────────────────────────────────────────────────────
+
+PROMPT_ROWS = [
+    ("Project Parser",       BLUE,   "2",  "First agent — every run",
+     "Extract project type, scale, location, actions, federal_nexus from free-text",
+     "agents/project_parser.py"),
+    ("Regulatory Screening", GREEN,  "2",  "After env data — RAG retrieval",
+     "Top-8 CFR chunks + project context → triggered regulations with citations",
+     "agents/regulatory_screening.py"),
+    ("Impact Analysis",      ORANGE, "2",  "Core matrix generation",
+     "Env data + regs + actions → significance × confidence × mitigation per cell",
+     "agents/impact_analysis.py"),
+    ("Report Synthesis",     YELLOW, "7",  "1 shared system + 6 section calls",
+     "NEPA technical writer: purpose, action, no-action, env, consequences, mitigation",
+     "agents/report_synthesis.py\nagents/templates/nepa_ea.py"),
+    ("GT Extractor",         PURPLE, "2",  "Evaluation only — not in pipeline",
+     "Sample EIS chunks → ground truth: category + significance + evidence",
+     "rag_eval/extractor.py"),
+]
+
+
+def add_prompts_slide(prs):
+    sl = prs.slides.add_slide(prs.slide_layouts[6])
+    bg(sl)
+    s = sl.shapes.add_shape(1, Inches(0), Inches(0), W, Inches(0.08))
+    fill(s, ORANGE)
+    txt(sl, "Prompts Overview  —  15 total across 5 LLM callers",
+        Inches(0.6), Inches(0.16), Inches(12.5), Inches(0.72),
+        size=26, bold=True, color=ORANGE)
+    d = sl.shapes.add_shape(1, Inches(0.6), Inches(1.0), Inches(12.1), Inches(0.025))
+    fill(d, DIVIDER)
+
+    txt(sl, "All non-report prompts enforce JSON-only output.  Every prompt pairs a system role with a runtime user prompt.",
+        Inches(0.6), Inches(1.06), Inches(12.1), Inches(0.38),
+        size=13, italic=True, color=GRAY_LT)
+
+    hrow = sl.shapes.add_shape(1, Inches(0.6), Inches(1.52), Inches(12.1), Inches(0.32))
+    fill(hrow, DARK)
+    for label, lx in [("CALLER", Inches(0.72)), ("#", Inches(2.48)),
+                      ("WHEN", Inches(2.86)), ("WHAT IT DOES", Inches(5.22)),
+                      ("FILE", Inches(9.62))]:
+        txt(sl, label, lx, Inches(1.56), Inches(2.3), Inches(0.22),
+            size=10, bold=True, color=ORANGE)
+
+    row_h = Inches(1.0)
+    for i, (name, color, count, when, what, fpath) in enumerate(PROMPT_ROWS):
+        ry = Inches(1.84) + i * row_h
+        rb = sl.shapes.add_shape(1, Inches(0.6), ry, Inches(12.1), row_h - Inches(0.04))
+        fill(rb, CARD if i % 2 == 0 else BG)
+        lb = sl.shapes.add_shape(1, Inches(0.6), ry, Inches(0.18), row_h - Inches(0.04))
+        fill(lb, color)
+        txt(sl, name, Inches(0.86), ry + Inches(0.08),
+            Inches(1.55), Inches(0.36), size=12, bold=True, color=color)
+        txt(sl, count, Inches(2.5), ry + Inches(0.32),
+            Inches(0.28), Inches(0.36), size=20, bold=True, color=color, align=PP_ALIGN.CENTER)
+        txt(sl, when, Inches(2.88), ry + Inches(0.1),
+            Inches(2.26), Inches(0.78), size=11, color=WHITE, wrap=True)
+        txt(sl, what, Inches(5.24), ry + Inches(0.1),
+            Inches(4.3), Inches(0.78), size=11, color=GRAY_LT, wrap=True)
+        txt(sl, fpath, Inches(9.64), ry + Inches(0.18),
+            Inches(2.98), Inches(0.62), size=9, italic=True, color=ORANGE, wrap=True)
+
+    tot = sl.shapes.add_shape(1, Inches(0.6), Inches(6.88), Inches(12.1), Inches(0.36))
+    fill(tot, DARK)
+    tot.line.color.rgb = ORANGE
+    tot.line.width = Pt(1)
+    txt(sl, "15 prompts total  ·  JSON-only output enforced on 13 of 15  ·  Report Synthesis uses free-form prose",
+        Inches(0.8), Inches(6.92), Inches(11.5), Inches(0.26),
+        size=12, bold=True, color=ORANGE)
+
+
+def _strip_slide_numbers(path: str) -> None:
+    SP_ANY_SLNUM = re.compile(
+        r'<p:sp\b(?:(?!<p:sp\b).)*?'
+        r'(?:type="sldNum"|type="slidenum")'
+        r'(?:(?!<p:sp\b).)*?</p:sp>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(path, "r") as zin, \
+         zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.endswith(".xml") and (
+                b"sldNum" in data or b"slidenum" in data
+            ):
+                cleaned = SP_ANY_SLNUM.sub("", data.decode("utf-8"))
+                data = cleaned.encode("utf-8")
+            zout.writestr(item, data)
+    buf.seek(0)
+    with open(path, "wb") as f:
+        f.write(buf.read())
 
 
 # ── Build ─────────────────────────────────────────────────────────────────────
@@ -649,7 +744,10 @@ def build(potx_path: str, output_path: str):
     placeholder(sl, "Evaluation page — upload panel + score bars",
                 Inches(0.6), Inches(5.98), Inches(12.1), Inches(1.3))
 
-    # ── 12. Prompts (1/2) — Agents 1–3 + Evaluation ──────────────────────────
+    # ── 12. Prompts Overview ─────────────────────────────────────────────────
+    add_prompts_slide(prs)
+
+    # ── 13. Prompts (1/2) — Agents 1–3 + Evaluation ──────────────────────────
     sl = prs.slides.add_slide(prs.slide_layouts[6])
     bg(sl)
     header(sl, "Prompts  (1/2)  —  15 total across 5 LLM callers", size=24)
@@ -1029,6 +1127,7 @@ def build(potx_path: str, output_path: str):
         size=13, color=GRAY_LT)
 
     prs.save(output_path)
+    _strip_slide_numbers(output_path)
     print(f"Saved: {output_path}  ({len(prs.slides)} slides)")
 
 

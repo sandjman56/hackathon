@@ -398,7 +398,7 @@ def get_project_outputs(project_id: int):
             cur.execute(
                 f'SELECT output, model, input_tokens, output_tokens, cost_usd, saved_at '
                 f'FROM "{table_name}" WHERE project_id = %s '
-                f'ORDER BY saved_at DESC LIMIT 1',
+                f'ORDER BY run_id DESC NULLS LAST, saved_at DESC LIMIT 1',
                 (project_id,),
             )
             row = cur.fetchone()
@@ -442,7 +442,7 @@ def get_project_run(project_id: int):
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, saved_at FROM pipeline_runs WHERE project_id = %s",
+            "SELECT id, saved_at FROM pipeline_runs WHERE project_id = %s ORDER BY id DESC LIMIT 1",
             (project_id,),
         )
         row = cur.fetchone()
@@ -458,38 +458,55 @@ def get_project_run(project_id: int):
 class SaveRunRequest(BaseModel):
     agent_outputs: dict
     agent_costs: dict = Field(default_factory=dict)
+    agent_durations: dict = Field(default_factory=dict)  # agent_key -> int (ms)
+    started_at: str | None = None  # ISO 8601 UTC from pipeline_start SSE event
 
 
 @app.post("/api/projects/{project_id}/save-run")
-def save_run(project_id: int, req: SaveRunRequest, force: bool = False):
+def save_run(project_id: int, req: SaveRunRequest):
+    from datetime import datetime as _dt
     conn = _get_connection()
     cur = None
     try:
         cur = conn.cursor()
 
-        cur.execute(
-            "SELECT id, saved_at FROM pipeline_runs WHERE project_id = %s",
-            (project_id,),
+        total_cost = sum(
+            float(req.agent_costs.get(k, {}).get("cost_usd") or 0)
+            for k, _ in AGENT_OUTPUT_TABLES
         )
-        existing = cur.fetchone()
-        if existing and not force:
-            return JSONResponse(
-                status_code=409,
-                content={"exists": True, "saved_at": existing[1].isoformat()},
-            )
+        total_input = sum(
+            int(req.agent_costs.get(k, {}).get("input_tokens") or 0)
+            for k, _ in AGENT_OUTPUT_TABLES
+        )
+        total_output = sum(
+            int(req.agent_costs.get(k, {}).get("output_tokens") or 0)
+            for k, _ in AGENT_OUTPUT_TABLES
+        )
+        total_duration = sum(
+            int(req.agent_durations.get(k) or 0)
+            for k, _ in AGENT_OUTPUT_TABLES
+        )
+
+        started_at = None
+        if req.started_at:
+            try:
+                started_at = _dt.fromisoformat(req.started_at.replace("Z", "+00:00"))
+            except ValueError:
+                pass
 
         cur.execute(
             """
-            INSERT INTO pipeline_runs (project_id, saved_at)
-            VALUES (%s, NOW())
-            ON CONFLICT (project_id) DO UPDATE SET saved_at = NOW()
+            INSERT INTO pipeline_runs
+                (project_id, started_at, finished_at, total_duration_ms,
+                 total_cost_usd, total_input_tokens, total_output_tokens, saved_at)
+            VALUES (%s, %s, NOW(), %s, %s, %s, %s, NOW())
             RETURNING id, saved_at
             """,
-            (project_id,),
+            (project_id, started_at, total_duration, total_cost, total_input, total_output),
         )
         row = cur.fetchone()
         if row is None:
-            raise RuntimeError("save_run: pipeline_runs upsert returned no row")
+            raise RuntimeError("save_run: pipeline_runs insert returned no row")
         run_id, saved_at = row
 
         for agent_key, table_name in AGENT_OUTPUT_TABLES:
@@ -498,24 +515,21 @@ def save_run(project_id: int, req: SaveRunRequest, force: bool = False):
             output = req.agent_outputs.get(agent_key)
             if output is None:
                 continue
-            costs = req.agent_costs.get(agent_key, {})
+            costs = req.agent_costs.get(agent_key) or {}
+            duration_ms = req.agent_durations.get(agent_key)
             cur.execute(
                 f'INSERT INTO "{table_name}" '
-                f"(project_id, output, model, input_tokens, output_tokens, cost_usd, saved_at) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, NOW()) "
-                f"ON CONFLICT (project_id) DO UPDATE SET "
-                f"output = EXCLUDED.output, model = EXCLUDED.model, "
-                f"input_tokens = EXCLUDED.input_tokens, "
-                f"output_tokens = EXCLUDED.output_tokens, "
-                f"cost_usd = EXCLUDED.cost_usd, "
-                f"saved_at = EXCLUDED.saved_at",
+                f"(project_id, run_id, output, model, input_tokens, output_tokens, cost_usd, duration_ms, saved_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 (
                     project_id,
+                    run_id,
                     psycopg2.extras.Json(output),
                     costs.get("model"),
                     costs.get("input_tokens"),
                     costs.get("output_tokens"),
                     costs.get("cost_usd"),
+                    duration_ms,
                 ),
             )
 
@@ -546,13 +560,6 @@ def save_project_outputs(project_id: int, req: SaveOutputsRequest):
                 f"""
                 INSERT INTO {table_name} (project_id, output, model, input_tokens, output_tokens, cost_usd)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (project_id) DO UPDATE SET
-                    output = EXCLUDED.output,
-                    model = EXCLUDED.model,
-                    input_tokens = EXCLUDED.input_tokens,
-                    output_tokens = EXCLUDED.output_tokens,
-                    cost_usd = EXCLUDED.cost_usd,
-                    saved_at = NOW()
                 """,
                 (
                     project_id,
@@ -570,6 +577,178 @@ def save_project_outputs(project_id: int, req: SaveOutputsRequest):
         conn.close()
 
 
+
+
+# --- Metrics endpoints -------------------------------------------------------
+
+@app.get("/api/metrics/overview")
+def get_metrics_overview():
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        per_agent = []
+        for agent_key, table_name in AGENT_OUTPUT_TABLES:
+            assert table_name in _ALLOWED_OUTPUT_TABLES
+            cur.execute(
+                f'SELECT model, AVG(cost_usd)::float, AVG(duration_ms)::float, COUNT(*) '
+                f'FROM "{table_name}" WHERE run_id IS NOT NULL GROUP BY model',
+            )
+            for row in cur.fetchall():
+                per_agent.append({
+                    "agent": agent_key,
+                    "model": row[0],
+                    "avg_cost_usd": float(row[1] or 0),
+                    "avg_duration_ms": float(row[2] or 0),
+                    "run_count": int(row[3]),
+                })
+
+        union_sql = " UNION ALL ".join(
+            f'SELECT model, input_tokens, output_tokens, cost_usd FROM "{t}" WHERE run_id IS NOT NULL'
+            for _, t in AGENT_OUTPUT_TABLES
+        )
+        cur.execute(
+            f"SELECT model, SUM(input_tokens)::bigint, SUM(output_tokens)::bigint, SUM(cost_usd)::float "
+            f"FROM ({union_sql}) AS all_outputs "
+            f"WHERE model IS NOT NULL AND model <> '' "
+            f"GROUP BY model ORDER BY SUM(cost_usd) DESC NULLS LAST"
+        )
+        per_model = [
+            {
+                "model": r[0],
+                "total_input_tokens": int(r[1] or 0),
+                "total_output_tokens": int(r[2] or 0),
+                "total_cost_usd": float(r[3] or 0),
+            }
+            for r in cur.fetchall()
+        ]
+
+        cur.execute(
+            "SELECT COUNT(*), SUM(total_cost_usd)::float, SUM(total_duration_ms)::bigint, "
+            "AVG(total_cost_usd)::float, AVG(total_duration_ms)::float "
+            "FROM pipeline_runs WHERE total_cost_usd IS NOT NULL"
+        )
+        r = cur.fetchone()
+        totals = {
+            "total_runs": int(r[0] or 0),
+            "total_cost_usd": float(r[1] or 0),
+            "total_duration_ms": int(r[2] or 0),
+            "avg_cost_per_run": float(r[3] or 0),
+            "avg_duration_per_run_ms": float(r[4] or 0),
+        }
+
+        return {"per_agent": per_agent, "per_model": per_model, "totals": totals}
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+@app.get("/api/metrics/runs")
+def get_all_runs():
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT pr.id, pr.project_id, pr.started_at, pr.finished_at,
+                   pr.total_duration_ms, pr.total_cost_usd,
+                   pr.total_input_tokens, pr.total_output_tokens,
+                   p.name AS project_name
+            FROM pipeline_runs pr
+            LEFT JOIN projects p ON p.id = pr.project_id
+            ORDER BY pr.id DESC
+            """
+        )
+        return [
+            {
+                "id": r[0],
+                "project_id": r[1],
+                "started_at": r[2].isoformat() if r[2] else None,
+                "finished_at": r[3].isoformat() if r[3] else None,
+                "total_duration_ms": r[4],
+                "total_cost_usd": float(r[5] or 0),
+                "total_input_tokens": r[6],
+                "total_output_tokens": r[7],
+                "project_name": r[8],
+            }
+            for r in cur.fetchall()
+        ]
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+@app.get("/api/metrics/runs/{run_id}")
+def get_run_detail(run_id: int):
+    conn = _get_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT pr.id, pr.project_id, pr.started_at, pr.finished_at,
+                   pr.total_duration_ms, pr.total_cost_usd,
+                   pr.total_input_tokens, pr.total_output_tokens,
+                   p.name AS project_name
+            FROM pipeline_runs pr
+            LEFT JOIN projects p ON p.id = pr.project_id
+            WHERE pr.id = %s
+            """,
+            (run_id,),
+        )
+        r = cur.fetchone()
+        if r is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        run = {
+            "id": r[0], "project_id": r[1],
+            "started_at": r[2].isoformat() if r[2] else None,
+            "finished_at": r[3].isoformat() if r[3] else None,
+            "total_duration_ms": r[4],
+            "total_cost_usd": float(r[5] or 0),
+            "total_input_tokens": r[6],
+            "total_output_tokens": r[7],
+            "project_name": r[8],
+        }
+        agents = []
+        for agent_key, table_name in AGENT_OUTPUT_TABLES:
+            assert table_name in _ALLOWED_OUTPUT_TABLES
+            cur.execute(
+                f'SELECT model, input_tokens, output_tokens, cost_usd, duration_ms '
+                f'FROM "{table_name}" WHERE run_id = %s',
+                (run_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                agents.append({
+                    "agent": agent_key,
+                    "model": row[0],
+                    "input_tokens": int(row[1] or 0),
+                    "output_tokens": int(row[2] or 0),
+                    "cost_usd": float(row[3] or 0),
+                    "duration_ms": row[4],
+                })
+        return {"run": run, "agents": agents}
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+@app.get("/api/metrics/pricing")
+def get_pricing():
+    from llm.pricing import MODEL_PRICING
+    return {
+        model_id: {
+            "label": info["label"],
+            "input_per_1m": info["input"],
+            "output_per_1m": info["output"],
+        }
+        for model_id, info in MODEL_PRICING.items()
+    }
 
 
 # --- Regulatory sources (DB-backed uploads + ingestion) -------------------

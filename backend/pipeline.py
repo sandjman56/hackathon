@@ -2,7 +2,9 @@ import json
 import logging
 import sys
 import threading
+import time
 import traceback
+from datetime import datetime, timezone
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
@@ -349,6 +351,7 @@ def stream_eia_pipeline(
         yield _sse_event("pipeline_start", {
             "pipeline_status": dict(pipeline_status),
             "agent_steps": {k: list(v) for k, v in agent_steps.items()},
+            "started_at": datetime.now(timezone.utc).isoformat(),
         })
         yield from _flush_logs()
 
@@ -391,6 +394,7 @@ def stream_eia_pipeline(
             })
             yield from _flush_logs()
 
+            _agent_start = time.time()
             try:
                 for i, step in enumerate(steps):
                     agent_steps[agent_key][i]["status"] = "running"
@@ -420,6 +424,7 @@ def stream_eia_pipeline(
                         "steps": agent_steps[agent_key],
                     })
 
+                _agent_duration_ms = int((time.time() - _agent_start) * 1000)
                 pipeline_status[agent_key] = "complete"
                 state["pipeline_status"] = dict(pipeline_status)
 
@@ -431,6 +436,7 @@ def stream_eia_pipeline(
 
                 yield _sse_event("agent_complete", {
                     "agent": agent_key,
+                    "duration_ms": _agent_duration_ms,
                     "pipeline_status": dict(pipeline_status),
                     "steps": agent_steps[agent_key],
                     "output": agent_output,
