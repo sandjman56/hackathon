@@ -649,7 +649,148 @@ def build(potx_path: str, output_path: str):
     placeholder(sl, "Evaluation page — upload panel + score bars",
                 Inches(0.6), Inches(5.98), Inches(12.1), Inches(1.3))
 
-    # ── 12. Results — Agent Outputs ───────────────────────────────────────────
+    # ── 12. Prompts (1/2) — Agents 1–3 + Evaluation ──────────────────────────
+    sl = prs.slides.add_slide(prs.slide_layouts[6])
+    bg(sl)
+    header(sl, "Prompts  (1/2)  —  15 total across 5 LLM callers", size=24)
+
+    txt(sl, "Every agent uses a system prompt (role + rules) paired with a user prompt"
+           " (runtime data). All non-report prompts enforce JSON-only output.",
+        Inches(0.6), Inches(1.1), Inches(12.1), Inches(0.48),
+        size=13, color=GRAY_LT)
+
+    # Table header
+    hrow = sl.shapes.add_shape(1, Inches(0.6), Inches(1.68), Inches(12.1), Inches(0.34))
+    fill(hrow, DARK)
+    for label, lx2 in [("CALLER", Inches(0.72)), ("SYSTEM PROMPT", Inches(2.35)),
+                       ("USER PROMPT", Inches(6.15)), ("FILE", Inches(9.95))]:
+        txt(sl, label, lx2, Inches(1.72), Inches(3.7), Inches(0.26),
+            size=10, bold=True, color=ORANGE)
+
+    prompt_rows = [
+        (
+            "Project Parser", BLUE,
+            "Extract structured metadata from NL input; respond JSON only",
+            "Format name + coords + description → 5 JSON fields\n(project_type, scale, location, actions, federal_nexus)",
+            "agents/project_parser.py",
+        ),
+        (
+            "Regulatory Screening", GREEN,
+            "NEPA compliance assistant; identify permits & approvals;\nno invented citations; JSON array only",
+            "RAG: top-8 retrieved CFR chunks + project context\n→ list of triggered regulations with citations",
+            "agents/regulatory_screening.py",
+        ),
+        (
+            "Impact Analysis", ORANGE,
+            "Assess every action × category × regulation;\nconfidence tiers tied to data quality (see slide 9)",
+            "Compile env API data + regulations + actions\n→ cells JSON with significance + confidence + mitigation",
+            "agents/impact_analysis.py",
+        ),
+        (
+            "GT Extractor\n(Evaluation)", PURPLE,
+            "Expert EIS analyst; extract ALL resource categories\nand significance levels; JSON array only",
+            "Up to 40 sampled EIS chunks (tables prioritized)\n→ ground truth: category + significance + evidence",
+            "rag_eval/extractor.py",
+        ),
+    ]
+
+    row_h = Inches(1.12)
+    for i, (name, color, sys_txt, usr_txt, fpath) in enumerate(prompt_rows):
+        ry = Inches(2.08) + i * row_h
+        rb = sl.shapes.add_shape(1, Inches(0.6), ry, Inches(12.1), row_h - Inches(0.06))
+        fill(rb, CARD if i % 2 == 0 else BG)
+        rb.line.color.rgb = DIVIDER
+        rb.line.width = Pt(0.5)
+
+        # Caller name chip
+        chip = sl.shapes.add_shape(1, Inches(0.62), ry + Inches(0.08),
+                                   Inches(1.6), row_h - Inches(0.22))
+        fill(chip, DARK)
+        chip.line.color.rgb = color
+        chip.line.width = Pt(1.2)
+        txt(sl, name, Inches(0.72), ry + Inches(0.18),
+            Inches(1.42), Inches(0.72), size=11, bold=True, color=color)
+
+        # System prompt
+        txt(sl, sys_txt, Inches(2.35), ry + Inches(0.1),
+            Inches(3.72), row_h - Inches(0.2), size=11, color=WHITE, wrap=True)
+
+        # User prompt
+        txt(sl, usr_txt, Inches(6.15), ry + Inches(0.1),
+            Inches(3.72), row_h - Inches(0.2), size=11, color=GRAY_LT, wrap=True)
+
+        # File path
+        txt(sl, fpath, Inches(9.95), ry + Inches(0.28),
+            Inches(2.65), Inches(0.5), size=9, italic=True, color=ORANGE)
+
+    # ── 13. Prompts (2/2) — Report Synthesis (7 prompts) ─────────────────────
+    sl = prs.slides.add_slide(prs.slide_layouts[6])
+    bg(sl)
+    header(sl, "Prompts  (2/2)  —  Agent 5: Report Synthesis  (7 prompts)", size=24)
+
+    txt(sl, "One system prompt sets the NEPA technical-writer role."
+           "  Six separate LLM calls generate individual EA sections.",
+        Inches(0.6), Inches(1.1), Inches(12.1), Inches(0.42),
+        size=13, color=GRAY_LT)
+
+    # System prompt card
+    sys_box = sl.shapes.add_shape(1, Inches(0.6), Inches(1.62), Inches(12.1), Inches(0.62))
+    fill(sys_box, DARK)
+    sys_box.line.color.rgb = YELLOW
+    sys_box.line.width = Pt(1.2)
+    txt(sl, "SYSTEM  (shared across all 6 section calls)",
+        Inches(0.75), Inches(1.66), Inches(5.0), Inches(0.28),
+        size=11, bold=True, color=YELLOW)
+    txt(sl, "NEPA technical writer · professional passive-voice prose · no invented data"
+           " · return section content only (no title/number) · 3–5 sentence paragraphs",
+        Inches(0.75), Inches(1.9), Inches(9.5), Inches(0.28),
+        size=12, color=GRAY_LT)
+    txt(sl, "agents/report_synthesis.py", Inches(10.8), Inches(1.74),
+        Inches(1.85), Inches(0.28), size=9, italic=True, color=ORANGE)
+
+    # 6 section prompt cards (2 columns × 3 rows)
+    section_prompts = [
+        ("§1  Purpose & Need",
+         "1–2 paragraphs: why this project,\nwhat need it addresses, where",
+         "agents/templates/nepa_ea.py"),
+        ("§2  Proposed Action",
+         "2–3 paragraphs: describe project\nand each discrete action",
+         "agents/templates/nepa_ea.py"),
+        ("§3  No-Action Alternative",
+         "1 paragraph: what happens if\nproject does not proceed",
+         "agents/templates/nepa_ea.py"),
+        ("§4  Affected Environment",
+         "Convert raw API data into readable\nnarrative of existing conditions",
+         "agents/templates/nepa_ea.py"),
+        ("§5  Environmental Consequences",
+         "Impact per category: actions causing it,\nsignificance level, regulatory basis",
+         "agents/templates/nepa_ea.py"),
+        ("§6  Mitigation Measures",
+         "Describe mitigations grouped by type:\navoidance / minimization / compensatory",
+         "agents/templates/nepa_ea.py"),
+    ]
+
+    col_w3 = Inches(5.9)
+    card_h = Inches(1.3)
+    card_g = Inches(0.14)
+    for i, (sec_title, sec_desc, fpath2) in enumerate(section_prompts):
+        col = i % 2
+        row = i // 2
+        cx3 = Inches(0.6) + col * (col_w3 + Inches(0.3))
+        cy3 = Inches(2.38) + row * (card_h + card_g)
+        cb2 = sl.shapes.add_shape(1, cx3, cy3, col_w3, card_h)
+        fill(cb2, CARD)
+        cb2.line.color.rgb = YELLOW
+        cb2.line.width = Pt(0.8)
+        txt(sl, sec_title, cx3 + Inches(0.15), cy3 + Inches(0.08),
+            col_w3 - Inches(0.3), Inches(0.3), size=12, bold=True, color=YELLOW)
+        txt(sl, sec_desc, cx3 + Inches(0.15), cy3 + Inches(0.42),
+            col_w3 - Inches(0.3), Inches(0.72), size=12, color=GRAY_LT, wrap=True)
+        txt(sl, fpath2, cx3 + col_w3 - Inches(2.65), cy3 + card_h - Inches(0.26),
+            Inches(2.55), Inches(0.22), size=8, italic=True, color=ORANGE,
+            align=PP_ALIGN.RIGHT)
+
+    # ── 14. Results — Agent Outputs ───────────────────────────────────────────
     sl = prs.slides.add_slide(prs.slide_layouts[6])
     bg(sl)
     header(sl, "Results — Agent Outputs")
