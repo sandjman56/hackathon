@@ -9,7 +9,7 @@ from pptx.util import Inches, Pt
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 BG        = RGBColor(0x1F, 0x28, 0x33)
-ORANGE    = RGBColor(0x00, 0xFF, 0x87)
+ORANGE    = RGBColor(0x00, 0xCC, 0x6A)
 WHITE     = RGBColor(0xFF, 0xFF, 0xFF)
 GRAY_LT   = RGBColor(0xD1, 0xD5, 0xDB)
 RED       = RGBColor(0xEF, 0x44, 0x44)
