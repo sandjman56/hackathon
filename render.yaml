@@ -1,0 +1,40 @@
+services:
+  # FastAPI backend
+  - type: web
+    name: eia-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: eia-db
+          property: connectionString
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: EMBEDDING_PROVIDER
+        value: gemini
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # React frontend (static site)
+  - type: web
+    name: eia-frontend
+    runtime: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://aiagentsproject-backend.onrender.com
+
+databases:
+  # PostgreSQL with pgvector extension
+  # Note: After creation, connect to the database and run:
+  #   CREATE EXTENSION IF NOT EXISTS vector;
+  - name: eia-db
+    plan: starter

@@ -1,0 +1,421 @@
+import { useEffect, useRef, useState } from 'react'
+import RunPreviewPanel from './RunPreviewPanel.jsx'
+import EvaluatePanel from './EvaluatePanel.jsx'
+
+const apiBase = import.meta.env.VITE_API_URL ?? ''
+const POLL_INTERVAL_MS = 2000
+const TERMINAL = new Set(['ready', 'failed'])
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function StatusPill({ doc }) {
+  const s = doc.status || 'pending'
+  const base = { ...styles.pill }
+  if (s === 'ready') base.borderColor = 'var(--green-primary)'
+  else if (s === 'failed') { base.borderColor = 'var(--red-alert)'; base.color = 'var(--red-alert)' }
+  else if (s === 'embedding') base.borderColor = 'var(--amber, #b4a347)'
+  else base.borderColor = 'var(--text-muted)'
+
+  let label = s.toUpperCase()
+  if (s === 'embedding' && doc.chunks_total > 0) {
+    label = `EMBEDDING ${doc.chunks_embedded || 0}/${doc.chunks_total}`
+  }
+  return (
+    <span style={base} title={doc.status_message || ''}>{label}</span>
+  )
+}
+
+function ProgressBar({ doc }) {
+  if (doc.status !== 'embedding' || !doc.chunks_total) return null
+  const pct = Math.min(100, Math.round((doc.chunks_embedded / doc.chunks_total) * 100))
+  return (
+    <div style={styles.progressOuter}>
+      <div style={{ ...styles.progressInner, width: `${pct}%` }} />
+    </div>
+  )
+}
+
+export default function EvaluationsView({ onBack, onOpenChunks }) {
+  const [docs, setDocs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef(null)
+  const mountedRef = useRef(true)
+  const timerRef = useRef(null)
+  const [splitPct, setSplitPct] = useState(70)
+  const draggingRef = useRef(false)
+  const splitContainerRef = useRef(null)
+
+  // Shared state: project selected in RunPreviewPanel drives EvaluatePanel
+  const [selectedProject, setSelectedProject] = useState(null)
+
+  // Inline project picker for upload
+  const [projects, setProjects] = useState([])
+  const [showUploadPicker, setShowUploadPicker] = useState(false)
+  const [uploadProjectId, setUploadProjectId] = useState('')
+
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!draggingRef.current || !splitContainerRef.current) return
+      const rect = splitContainerRef.current.getBoundingClientRect()
+      const pct = ((e.clientX - rect.left) / rect.width) * 100
+      setSplitPct(Math.min(85, Math.max(15, pct)))
+    }
+    const onMouseUp = () => { draggingRef.current = false }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
+
+  const pollOnce = async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/evaluations`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      if (!mountedRef.current) return
+      setDocs(data.documents || [])
+      setError(null)
+    } catch (e) {
+      if (mountedRef.current) setError(e.message)
+    } finally {
+      if (mountedRef.current) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    mountedRef.current = true
+    pollOnce()
+    fetch(`${apiBase}/api/projects`)
+      .then(r => r.json())
+      .then(data => setProjects(Array.isArray(data) ? data : []))
+      .catch(() => {})
+    return () => {
+      mountedRef.current = false
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    const hasNonTerminal = docs.some(d => !TERMINAL.has(d.status || 'pending'))
+    if (hasNonTerminal) {
+      timerRef.current = setInterval(pollOnce, POLL_INTERVAL_MS)
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [docs])
+
+  const handleUploadClick = () => {
+    setShowUploadPicker(true)
+  }
+
+  const handleUploadConfirm = () => {
+    setShowUploadPicker(false)
+    fileRef.current?.click()
+  }
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true); setError(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('project_id', uploadProjectId)
+      const res = await fetch(`${apiBase}/api/evaluations`, { method: 'POST', body: form })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail || `HTTP ${res.status}`)
+      }
+      const doc = await res.json()
+      setDocs(prev => {
+        const existing = prev.find(d => d.id === doc.id)
+        if (existing) return prev.map(d => d.id === doc.id ? doc : d)
+        return [doc, ...prev]
+      })
+    } catch (e) { setError(e.message) }
+    finally {
+      setUploading(false)
+      setUploadProjectId('')
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this evaluation and all its chunks?')) return
+    try {
+      const res = await fetch(`${apiBase}/api/evaluations/${id}`, { method: 'DELETE' })
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
+      setDocs(prev => prev.filter(d => d.id !== id))
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleRetry = async (id) => {
+    try {
+      const res = await fetch(`${apiBase}/api/evaluations/${id}/reingest`, { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail || `HTTP ${res.status}`)
+      }
+      pollOnce()
+    } catch (e) { setError(e.message) }
+  }
+
+  return (
+    <div style={styles.container}>
+      <div style={styles.topBar}>
+        <button style={styles.backBtn} onClick={onBack}>&larr; BACK</button>
+        <span style={styles.pageTitle}>EVALUATIONS</span>
+        <span style={styles.docCount}>
+          {!loading && !error && `${docs.length} documents`}
+        </span>
+      </div>
+
+      <div style={styles.body}>
+        <div style={styles.uploadZone}>
+          <input
+            ref={fileRef}
+            type="file" accept=".pdf"
+            onChange={handleUpload}
+            style={{ display: 'none' }}
+          />
+          <button
+            style={styles.uploadBtn}
+            onClick={handleUploadClick}
+            disabled={uploading}
+          >
+            {uploading ? 'UPLOADING...' : 'UPLOAD EIS PDF'}
+          </button>
+          <span style={styles.uploadHint}>PDF files up to 25 MB</span>
+        </div>
+
+        {showUploadPicker && (
+          <div style={styles.uploadPickerRow}>
+            <label style={styles.uploadPickerLabel}>PROJECT <span style={{ color: 'var(--red-alert)' }}>*</span></label>
+            <select
+              style={styles.uploadPickerSelect}
+              value={uploadProjectId}
+              onChange={e => setUploadProjectId(e.target.value)}
+              autoFocus
+            >
+              <option value="">— select project —</option>
+              {projects.length === 0
+                ? <option disabled>No projects yet — create a project first</option>
+                : projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))
+              }
+            </select>
+            <button
+              style={{ ...styles.uploadPickerConfirm, opacity: uploadProjectId ? 1 : 0.4, cursor: uploadProjectId ? 'pointer' : 'not-allowed' }}
+              onClick={handleUploadConfirm}
+              disabled={!uploadProjectId}
+            >
+              SELECT FILE
+            </button>
+            <button style={styles.uploadPickerCancel} onClick={() => { setShowUploadPicker(false); setUploadProjectId('') }}>
+              CANCEL
+            </button>
+          </div>
+        )}
+
+        {error && <div style={styles.error}>Error: {error}</div>}
+        {loading && <div style={styles.muted}>Loading...</div>}
+        {!loading && docs.length === 0 && (
+          <div style={styles.muted}>No evaluation documents uploaded yet.</div>
+        )}
+
+        {!loading && docs.length > 0 && (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>FILENAME</th>
+                <th style={styles.th}>SIZE</th>
+                <th style={styles.th}>STATUS</th>
+                <th style={styles.th}>UPLOADED</th>
+                <th style={styles.th}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {docs.map((d) => (
+                <tr key={d.id} style={styles.tr}>
+                  <td style={styles.td}>
+                    <button
+                      style={styles.linkBtn}
+                      onClick={() => onOpenChunks && onOpenChunks(d.id, d.filename)}
+                      disabled={d.status !== 'ready'}
+                      title={d.status !== 'ready' ? 'Chunks available once ingest is ready' : 'View chunks'}
+                    >
+                      {d.filename}
+                    </button>
+                  </td>
+                  <td style={styles.td}>{formatBytes(d.size_bytes)}</td>
+                  <td style={styles.td}>
+                    <StatusPill doc={d} />
+                    <ProgressBar doc={d} />
+                  </td>
+                  <td style={styles.td}>
+                    {new Date(d.uploaded_at).toLocaleDateString()}
+                  </td>
+                  <td style={styles.td}>
+                    {d.status === 'failed' && (
+                      <button style={styles.retryBtn} onClick={() => handleRetry(d.id)}>
+                        RETRY
+                      </button>
+                    )}
+                    <button style={styles.deleteBtn} onClick={() => handleDelete(d.id)}>
+                      DELETE
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Evaluation split pane ──────────────────────────────── */}
+      <div style={styles.splitDividerH} />
+      <div ref={splitContainerRef} style={styles.splitContainer}>
+        <div style={{ ...styles.splitLeft, width: `${splitPct}%` }}>
+          <RunPreviewPanel onProjectSelect={setSelectedProject} />
+        </div>
+        <div
+          style={styles.splitHandle}
+          onMouseDown={() => { draggingRef.current = true }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--green-primary)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border)' }}
+        />
+        <div style={{ ...styles.splitRight, width: `${100 - splitPct}%` }}>
+          <EvaluatePanel selectedProject={selectedProject} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const styles = {
+  container: { height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  topBar: {
+    display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 24px',
+    borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', flexShrink: 0,
+  },
+  backBtn: {
+    fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '1px',
+    color: 'var(--text-secondary)', background: 'transparent',
+    border: '1px solid var(--border)', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer',
+  },
+  pageTitle: {
+    fontFamily: 'var(--font-mono)', fontSize: '14px', fontWeight: 600,
+    color: 'var(--green-primary)', letterSpacing: '3px',
+  },
+  docCount: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' },
+  body: { flexShrink: 0, padding: '24px', overflowY: 'auto', maxHeight: '40vh' },
+  uploadZone: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' },
+  uploadBtn: {
+    fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '1px',
+    color: 'var(--green-primary)', background: 'transparent',
+    border: '1px solid var(--green-primary)', borderRadius: '4px', padding: '8px 16px', cursor: 'pointer',
+  },
+  uploadHint: { fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-muted)' },
+  error: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--red-alert)', padding: '8px 0' },
+  muted: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', padding: '8px 0' },
+  table: { width: '100%', borderCollapse: 'collapse' },
+  th: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--text-muted)', textAlign: 'left', padding: '8px 12px',
+    borderBottom: '1px solid var(--border)',
+  },
+  tr: { borderBottom: '1px solid var(--border)' },
+  td: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', padding: '10px 12px' },
+  pill: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--green-primary)', background: 'transparent',
+    border: '1px solid var(--green-primary)', borderRadius: '3px', padding: '2px 6px', display: 'inline-block',
+  },
+  progressOuter: {
+    marginTop: '4px', width: '100px', height: '3px', background: 'var(--border)',
+    borderRadius: '2px', overflow: 'hidden',
+  },
+  progressInner: { height: '100%', background: 'var(--green-primary)' },
+  linkBtn: {
+    fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--green-primary)',
+    background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline',
+  },
+  retryBtn: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--green-primary)', background: 'transparent',
+    border: '1px solid var(--green-primary)', borderRadius: '3px', padding: '3px 8px',
+    cursor: 'pointer', marginRight: '8px',
+  },
+  deleteBtn: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--red-alert)', background: 'transparent',
+    border: '1px solid var(--red-alert)', borderRadius: '3px', padding: '3px 8px', cursor: 'pointer',
+  },
+  uploadPickerRow: {
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '8px 12px', background: 'var(--bg-card)',
+    border: '1px solid var(--border)', borderRadius: '4px',
+    marginBottom: '16px',
+  },
+  uploadPickerLabel: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--text-muted)', whiteSpace: 'nowrap',
+  },
+  uploadPickerSelect: {
+    fontFamily: 'var(--font-mono)', fontSize: '11px',
+    color: 'var(--text-primary)', background: 'var(--bg-secondary)',
+    border: '1px solid var(--border)', borderRadius: '4px',
+    padding: '4px 8px', cursor: 'pointer', flex: 1,
+  },
+  uploadPickerConfirm: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: '#0a0a0a', background: 'var(--green-primary)',
+    border: '1px solid var(--green-primary)', borderRadius: '3px',
+    padding: '4px 12px', cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  uploadPickerCancel: {
+    fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px',
+    color: 'var(--text-muted)', background: 'transparent',
+    border: '1px solid var(--border)', borderRadius: '3px',
+    padding: '4px 10px', cursor: 'pointer',
+  },
+  splitDividerH: {
+    height: '1px',
+    background: 'var(--border)',
+    flexShrink: 0,
+  },
+  splitContainer: {
+    flex: 1,
+    display: 'flex',
+    overflow: 'hidden',
+  },
+  splitLeft: {
+    overflow: 'auto',
+    padding: '16px',
+  },
+  splitHandle: {
+    width: '4px',
+    background: 'var(--border)',
+    cursor: 'col-resize',
+    flexShrink: 0,
+    transition: 'background 0.15s',
+  },
+  splitRight: {
+    overflow: 'auto',
+    padding: '16px',
+  },
+}
