@@ -160,3 +160,13 @@ EMBEDDING_PROVIDER=ollama
    - `eia-db` — Managed PostgreSQL
 4. Set secret environment variables (`OPENAI_API_KEY`, etc.) in the Render dashboard
 5. After the database is created, connect and run `CREATE EXTENSION IF NOT EXISTS vector;`
+
+
+## License
+
+Copyright (c) 2025 sandjman56. All rights reserved.
+
+This project is proprietary software. Personal and educational use is permitted.
+**Sale, commercial licensing, or monetization of this software or any derivative work is strictly prohibited without the express prior written consent of the repository owner.**
+
+See [LICENSE](./LICENSE) for full terms.
