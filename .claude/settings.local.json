@@ -66,7 +66,21 @@
       "WebFetch(domain:ai.google.dev)",
       "WebFetch(domain:openai.com)",
       "WebFetch(domain:pricepertoken.com)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "WebFetch(domain:archive.epa.gov)",
+      "WebFetch(domain:www.transit.dot.gov)",
+      "WebFetch(domain:mscca.org)",
+      "WebFetch(domain:regs.maryland.gov)",
+      "WebFetch(domain:www.wcc.state.md.us)",
+      "WebFetch(domain:www.csus.edu)",
+      "WebFetch(domain:mdrules.elaws.us)",
+      "WebFetch(domain:content.govdelivery.com)",
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(cp webfetch-1776545118486-huws38.bin design.tar.gz)",
+      "Bash(mkdir -p design_out)",
+      "Bash(tar -xzf design.tar.gz -C design_out)",
+      "Bash(gunzip -c design.tar.gz)",
+      "Bash(tar -xzf /Users/sanderschulman/.claude/projects/-Users-sanderschulman-Developer-aiagentsproject/d70efe3a-ea04-43cb-bf6a-fbad7ffbb67e/tool-results/webfetch-1776552689516-toz2dg.bin -C design_extract)"
     ],
     "deny": [
       "Bash(rm -rf *)",
