@@ -7,6 +7,7 @@ import Globe from './components/Globe.jsx'
 import DatabaseView from './components/DatabaseView.jsx'
 import EvaluationsView from './components/EvaluationsView.jsx'
 import EvaluationChunksView from './components/EvaluationChunksView.jsx'
+import MetricsView from './pages/MetricsView.jsx'
 import useModelSelections from './hooks/useModelSelections.js'
 import { runEcfrIngestCommand } from './lib/ecfrIngestCommand.js'
 
@@ -31,10 +32,15 @@ function App() {
   const [selectedEvalFilename, setSelectedEvalFilename] = useState(null)
   const { selections, setSelection, availableProviders, modelCatalog } = useModelSelections()
   const [agentCosts, setAgentCosts] = useState({})
+  const [agentDurations, setAgentDurations] = useState({})
+  const [pipelineStartedAt, setPipelineStartedAt] = useState(null)
   const [currentProjectId, setCurrentProjectId] = useState(null)
   const [projectInfo, setProjectInfo] = useState({ projectName: '', coordinates: '' })
   const [saveResultsFlash, setSaveResultsFlash] = useState(null) // null | 'saving' | 'saved' | 'error'
   const [pendingOverwrite, setPendingOverwrite] = useState(null) // null | {saved_at}
+  const [pipelineRunKey, setPipelineRunKey] = useState(0)
+  const [evalMenuOpen, setEvalMenuOpen] = useState(false)
+  const evalMenuRef = useRef(null)
   const [systemStatus, setSystemStatus] = useState('checking') // 'checking'|'online'|'pending'|'offline'
   const statusTimerRef = useRef(null)
   const globeContainerRef = useRef(null)
@@ -83,8 +89,27 @@ function App() {
     return () => ro.disconnect()
   }, [])
 
+  useEffect(() => {
+    if (!evalMenuOpen) return
+    const handleOutside = (e) => {
+      if (evalMenuRef.current && !evalMenuRef.current.contains(e.target)) {
+        setEvalMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [evalMenuOpen])
+
   const handleCostUpdate = (data) => {
     setAgentCosts((prev) => ({ ...prev, [data.agent]: data }))
+  }
+
+  const handleDurationUpdate = (agentKey, durationMs) => {
+    setAgentDurations((prev) => ({ ...prev, [agentKey]: durationMs }))
+  }
+
+  const handlePipelineStartedAt = (startedAt) => {
+    setPipelineStartedAt(startedAt)
   }
 
   const handleResult = (data) => {
@@ -110,7 +135,12 @@ function App() {
   }
 
   const handleRunningChange = (isRunning) => {
-    if (isRunning) setAgentCosts({})
+    if (isRunning) {
+      setAgentCosts({})
+      setAgentDurations({})
+      setPipelineStartedAt(null)
+      setPipelineRunKey((k) => k + 1)
+    }
     setRunning(isRunning)
   }
 
@@ -137,31 +167,25 @@ function App() {
     })
   }
 
-  const handleSaveResults = async (force = false) => {
+  const handleSaveResults = async () => {
     if (!currentProjectId) {
       setSaveResultsFlash('error')
       setTimeout(() => setSaveResultsFlash(null), 2000)
       return
     }
     setSaveResultsFlash('saving')
-    setPendingOverwrite(null)
     try {
       const apiBase = import.meta.env.VITE_API_URL ?? ''
-      const url = `${apiBase}/api/projects/${currentProjectId}/save-run${force ? '?force=true' : ''}`
-      const res = await fetch(url, {
+      const res = await fetch(`${apiBase}/api/projects/${currentProjectId}/save-run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           agent_outputs: agentOutputs,
           agent_costs: agentCosts,
+          agent_durations: agentDurations,
+          started_at: pipelineStartedAt,
         }),
       })
-      if (res.status === 409) {
-        const body = await res.json()
-        setSaveResultsFlash(null)
-        setPendingOverwrite({ saved_at: body.saved_at })
-        return
-      }
       if (!res.ok) throw new Error('save failed')
       setSaveResultsFlash('saved')
       setTimeout(() => setSaveResultsFlash(null), 1500)
@@ -188,12 +212,31 @@ function App() {
           </div>
         </div>
         <div style={styles.headerRight}>
-          <button
-            style={view === 'evaluations' ? { ...styles.dbBtn, background: 'var(--green-dim)' } : styles.dbBtn}
-            onClick={() => setView(view === 'evaluations' ? 'main' : 'evaluations')}
-          >
-            EVALUATIONS
-          </button>
+          <div ref={evalMenuRef} style={{ position: 'relative' }}>
+            <button
+              style={['evaluations', 'evaluation-chunks', 'cost', 'latency'].includes(view) ? { ...styles.dbBtn, background: 'var(--green-dim)' } : styles.dbBtn}
+              onClick={() => setEvalMenuOpen((o) => !o)}
+            >
+              EVALUATIONS ▾
+            </button>
+            {evalMenuOpen && (
+              <div style={styles.evalDropdown}>
+                {[
+                  { label: 'PIPELINE EVALS', v: 'evaluations' },
+                  { label: 'COST', v: 'cost' },
+                  { label: 'LATENCY', v: 'latency' },
+                ].map(({ label, v }) => (
+                  <button
+                    key={v}
+                    style={{ ...styles.evalDropdownItem, ...(view === v ? styles.evalDropdownItemActive : {}) }}
+                    onClick={() => { setView(v); setEvalMenuOpen(false) }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             style={view === 'db' ? { ...styles.dbBtn, background: 'var(--green-dim)' } : styles.dbBtn}
             onClick={() => setView(view === 'db' ? 'main' : 'db')}
@@ -228,11 +271,16 @@ function App() {
           filename={selectedEvalFilename}
           onBack={() => setView('evaluations')}
         />
+      ) : view === 'cost' ? (
+        <MetricsView metric="cost" onBack={() => setView('main')} />
+      ) : view === 'latency' ? (
+        <MetricsView metric="latency" onBack={() => setView('main')} />
       ) : (
         <div style={styles.main}>
           {/* Left: project form */}
           <div style={styles.colLeft}>
             <ProjectForm
+              projectId={currentProjectId}
               onResult={handleResult}
               onPipelineUpdate={handlePipelineUpdate}
               onStepsUpdate={handleStepsUpdate}
@@ -240,6 +288,8 @@ function App() {
               onRunningChange={handleRunningChange}
               modelSelections={selections}
               onCostUpdate={handleCostUpdate}
+              onDurationUpdate={handleDurationUpdate}
+              onPipelineStartedAt={handlePipelineStartedAt}
               onProjectIdChange={(id) => { setCurrentProjectId(id); setPendingOverwrite(null) }}
               onProjectInfoChange={setProjectInfo}
               onLoadOutputs={(outputs, costs, pipelineStatus) => {
@@ -273,6 +323,8 @@ function App() {
                 availableProviders={availableProviders}
                 modelCatalog={modelCatalog}
                 agentCosts={agentCosts}
+                agentDurations={agentDurations}
+                pipelineRunKey={pipelineRunKey}
               />
             </div>
             <div style={styles.colMiddleBottom}>
@@ -522,6 +574,34 @@ const styles = {
     borderRadius: '3px',
     padding: '4px 10px',
     cursor: 'pointer',
+  },
+  evalDropdown: {
+    position: 'absolute',
+    top: 'calc(100% + 4px)',
+    right: 0,
+    background: 'var(--bg-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: '4px',
+    zIndex: 100,
+    minWidth: '150px',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  evalDropdownItem: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    letterSpacing: '1px',
+    color: 'var(--text-secondary)',
+    background: 'transparent',
+    border: 'none',
+    borderBottom: '1px solid var(--border)',
+    padding: '8px 14px',
+    cursor: 'pointer',
+    textAlign: 'left',
+  },
+  evalDropdownItemActive: {
+    color: 'var(--green-primary)',
+    background: 'var(--green-dim)',
   },
   overwriteCancelBtn: {
     fontFamily: 'var(--font-mono)',

@@ -79,8 +79,12 @@ The lower half of the Evaluations page provides a split-pane view for reviewing 
 | `POST` | `/api/evaluations/{id}/search` — scoped similarity search |
 | `DELETE` | `/api/evaluations/{id}` — cascades to chunks via FK. Returns `409` if status is `embedding` (refuses to orphan a running ingest). |
 | `GET` | `/api/projects/{id}/outputs` — returns project record + latest agent output row for each of the 5 agents. Used by the IMPORT RUN panel. |
-| `GET` | `/api/projects/{id}/run` — returns `{"run_id": int, "saved_at": "..."}` if the project has a saved pipeline run, else `{"run": null}`. |
-| `POST` | `/api/projects/{id}/save-run` — body: `{"agent_outputs": {...}, "agent_costs": {...}}`. UPSERTs `pipeline_runs` + all 5 agent output tables atomically. Returns `409 {"exists": true, "saved_at": "..."}` if a run already exists; append `?force=true` to overwrite. |
+| `GET` | `/api/projects/{id}/run` — returns `{"run_id": int, "saved_at": "..."}` (most recent run) or `{"run": null}`. |
+| `POST` | `/api/projects/{id}/save-run` — body: `{"agent_outputs": {...}, "agent_costs": {...}, "agent_durations": {...}, "started_at": "<ISO>"}`. Always INSERTs a new `pipeline_runs` row + all 5 agent output rows atomically. Returns `{"run_id": int, "saved_at": "..."}`. Multiple runs per project are stored. **Requires project to be saved first** (the RUN PIPELINE button is disabled until a project_id exists). |
+| `GET` | `/api/metrics/overview` — aggregate cost/latency stats across all runs: `{per_agent, per_model, totals}`. |
+| `GET` | `/api/metrics/runs` — list all pipeline runs across all projects, newest first. Each row includes `project_name`, `total_cost_usd`, `total_duration_ms`, `total_input_tokens`, `total_output_tokens`. |
+| `GET` | `/api/metrics/runs/{run_id}` — single run detail with per-agent breakdown (`cost_usd`, `duration_ms`, `input_tokens`, `output_tokens`, `model`). |
+| `GET` | `/api/metrics/pricing` — returns the `MODEL_PRICING` dict (`label`, `input_per_1m`, `output_per_1m` per model ID). Used by the Cost page model table. |
 | `POST` | `/api/evaluations/score` — body: `{"project_id": int}`. Extracts/reuses ground truth from EIS chunks, scores against impact matrix, upserts to `evaluation_scores`, returns score row. Ground truth extraction calls an LLM once per document and is cached. |
 | `GET` | `/api/evaluations/score/{project_id}` — fetch a previously computed score without re-running. Auto-called by EvaluatePanel on project load. |
 | `PATCH` | `/api/regulations/sources/assign` — body: `{"source_ids": ["<uuid>", ...], "project_id": int \| null}`. Assigns (or unassigns when `project_id` is null) one or more regulatory sources to a project. Pydantic validates UUID format (returns 422 on bad input). During a pipeline run, `RegulatoryScreeningAgent` restricts RAG retrieval to sources assigned to `project_id`; falls back to all sources if none are assigned. |

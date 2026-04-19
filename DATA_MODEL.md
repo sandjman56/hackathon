@@ -1,6 +1,6 @@
 # Data Model — EIA Agent Database
 
-> Last updated: 2026-04-16. Tables created by `db/vector_store.py:init_db()`.
+> Last updated: 2026-04-19. Tables created by `db/vector_store.py:init_db()`.
 > Database: `aiagentsdb` (PostgreSQL + pgvector)
 
 ---
@@ -29,11 +29,13 @@ All 5 agent output tables share an identical schema. Each row stores the full JS
 |--------|------|----------|---------|
 | `id` | integer | NO | `nextval(...)` |
 | `project_id` | integer | NO | |
+| `run_id` | integer | YES | FK → `pipeline_runs.id` |
 | `output` | jsonb | NO | |
 | `model` | text | YES | |
 | `input_tokens` | integer | YES | |
 | `output_tokens` | integer | YES | |
 | `cost_usd` | numeric | YES | |
+| `duration_ms` | integer | YES | |
 | `saved_at` | timestamptz | YES | `now()` |
 
 **Tables using this schema:**
@@ -43,9 +45,9 @@ All 5 agent output tables share an identical schema. Each row stores the full JS
 - `impact_analysis_outputs`
 - `report_synthesis_outputs`
 
-**Relationships:** `project_id` → `projects.id` (ON DELETE CASCADE)
+**Relationships:** `project_id` → `projects.id` (ON DELETE CASCADE); `run_id` → `pipeline_runs.id` (nullable)
 
-**Write path:** `pipeline.py:stream_eia_pipeline()` inserts one row per agent after each agent completes, keyed by the optional `project_id` from `POST /api/run`. Rows accumulate across runs; the read endpoint (`GET /api/projects/{id}/outputs`) always returns the most recent row per agent (`ORDER BY saved_at DESC LIMIT 1`).
+**Write path:** `POST /api/projects/{id}/save-run` inserts one row per agent per run. Multiple runs per project are stored. The read endpoint (`GET /api/projects/{id}/outputs`) returns the most recent row per agent (`ORDER BY run_id DESC NULLS LAST, saved_at DESC LIMIT 1`).
 
 ---
 
@@ -213,17 +215,25 @@ LLM-extracted ground truth cache per EIS document. Populated on first `POST /api
 
 ## pipeline_runs
 
-One saved pipeline run per project. Created/overwritten when the user clicks SAVE RESULTS after a pipeline completes. Provides a stable `run_id` anchor for evaluation scoring.
+One row per pipeline run per project. Multiple runs per project are allowed. Created each time the user clicks SAVE RESULTS. Provides a stable `run_id` anchor for evaluation scoring and the metrics pages.
 
 | Column | Type | Nullable | Default |
 |--------|------|----------|---------|
 | `id` | integer | NO | `nextval(...)` |
-| `project_id` | integer | NO | FK → `projects.id` (CASCADE), UNIQUE |
+| `project_id` | integer | NO | FK → `projects.id` (CASCADE) |
+| `started_at` | timestamptz | YES | |
+| `finished_at` | timestamptz | YES | `now()` at save time |
+| `total_duration_ms` | integer | YES | sum of all agent `duration_ms` |
+| `total_cost_usd` | numeric(10,6) | YES | sum of all agent `cost_usd` |
+| `total_input_tokens` | integer | YES | sum of all agent `input_tokens` |
+| `total_output_tokens` | integer | YES | sum of all agent `output_tokens` |
 | `saved_at` | timestamptz | YES | `now()` |
 
-**Write path:** `POST /api/projects/{id}/save-run` — UPSERTs this row + all 5 agent output tables atomically. Returns `409` if a run already exists and `?force=true` is not set.
+**Write path:** `POST /api/projects/{id}/save-run` — always INSERTs a new row + all 5 agent output rows atomically. Returns `{"run_id": int, "saved_at": "..."}`.
 
-**Read path:** `GET /api/projects/{id}/run` — returns `{run_id, saved_at}` or `{run: null}`.
+**Read path:** `GET /api/projects/{id}/run` — returns the most recent `{run_id, saved_at}` or `{run: null}`.
+
+**Metrics paths:** `GET /api/metrics/overview`, `GET /api/metrics/runs`, `GET /api/metrics/runs/{run_id}` — aggregate and drill-down queries across all runs.
 
 ---
 

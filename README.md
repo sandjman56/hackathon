@@ -117,6 +117,17 @@ scoped retrieval.
 
 See [`docs/eval-pipeline.md`](docs/eval-pipeline.md) for the operator guide.
 
+### Cost & Latency Pages
+
+Two analytics pages accessible via the **EVALUATIONS ▾** dropdown:
+
+- **COST** — total spend, avg cost per run, per-agent bar chart (avg cost), model breakdown table with pricing per 1M tokens, and a run drill-down selector showing per-agent input/output tokens and cost.
+- **LATENCY** — same layout showing wall-clock time in seconds instead of dollars. The pipeline also shows a live per-agent timer while running.
+
+Both pages read from the `/api/metrics/*` endpoints and display `—` when no data has been saved yet.
+
+**Prerequisite:** A project must be saved before running the pipeline (RUN PIPELINE is disabled until a `project_id` exists). After the pipeline completes, click **SAVE RESULTS** to persist the run and have it appear in the metrics pages.
+
 ### Evaluation Panel — IMPORT RUN
 
 The lower half of the Evaluations page is a resizable split pane for reviewing past pipeline runs:

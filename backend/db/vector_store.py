@@ -50,6 +50,20 @@ def init_db():
                 saved_at TIMESTAMPTZ DEFAULT NOW()
             );
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id                  SERIAL PRIMARY KEY,
+                project_id          INTEGER NOT NULL
+                    REFERENCES projects(id) ON DELETE CASCADE,
+                started_at          TIMESTAMPTZ,
+                finished_at         TIMESTAMPTZ,
+                total_duration_ms   INTEGER,
+                total_cost_usd      NUMERIC(10,6),
+                total_input_tokens  INTEGER,
+                total_output_tokens INTEGER,
+                saved_at            TIMESTAMPTZ DEFAULT NOW()
+            );
+        """)
         # Agent output tables — one per pipeline agent
         for table_name in (
             "project_parser_outputs",
@@ -60,25 +74,52 @@ def init_db():
         ):
             cur.execute(f"""
                 CREATE TABLE IF NOT EXISTS {table_name} (
-                    id SERIAL PRIMARY KEY,
+                    id         SERIAL PRIMARY KEY,
                     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    output JSONB NOT NULL,
-                    model TEXT,
-                    input_tokens INTEGER,
+                    run_id     INTEGER REFERENCES pipeline_runs(id) ON DELETE SET NULL,
+                    output     JSONB NOT NULL,
+                    model      TEXT,
+                    input_tokens  INTEGER,
                     output_tokens INTEGER,
-                    cost_usd NUMERIC(10,6),
-                    saved_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE (project_id)
+                    cost_usd      NUMERIC(10,6),
+                    duration_ms   INTEGER,
+                    saved_at      TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pipeline_runs (
-                id         SERIAL PRIMARY KEY,
-                project_id INTEGER UNIQUE NOT NULL
-                    REFERENCES projects(id) ON DELETE CASCADE,
-                saved_at   TIMESTAMPTZ DEFAULT NOW()
-            );
-        """)
+
+        # ── Idempotent migrations for existing installations ──────────────
+        # Drop old UNIQUE(project_id) constraints (allow many runs per project)
+        cur.execute(
+            "ALTER TABLE pipeline_runs DROP CONSTRAINT IF EXISTS pipeline_runs_project_id_key"
+        )
+        for col in (
+            "started_at TIMESTAMPTZ",
+            "finished_at TIMESTAMPTZ",
+            "total_duration_ms INTEGER",
+            "total_cost_usd NUMERIC(10,6)",
+            "total_input_tokens INTEGER",
+            "total_output_tokens INTEGER",
+        ):
+            cur.execute(f"ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS {col}")
+
+        for tbl in (
+            "project_parser_outputs",
+            "environmental_data_outputs",
+            "regulatory_screening_outputs",
+            "impact_analysis_outputs",
+            "report_synthesis_outputs",
+        ):
+            cur.execute(
+                f"ALTER TABLE {tbl} DROP CONSTRAINT IF EXISTS {tbl}_project_id_key"
+            )
+            cur.execute(
+                f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS "
+                f"run_id INTEGER REFERENCES pipeline_runs(id) ON DELETE SET NULL"
+            )
+            cur.execute(
+                f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS duration_ms INTEGER"
+            )
+
         conn.commit()
         cur.close()
 
